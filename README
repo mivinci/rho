@@ -13,6 +13,6 @@ JF is a programming language built from scratch with lexical scopes and some mod
 
 Each runtime has more than one contexts and each context has its own stack for function calls and local variables. The runtime also maintains a global heap space for objects allocated out of stacks and does garbage collection. Contexts are scheduled by the runtime to execute bytecodes concurrently.
 
-JF is for learning purposes only and is under slow development.
+JF is for learning purposes only and is under really slow development.
 
 MIT licensed.
