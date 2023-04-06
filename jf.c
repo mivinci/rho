@@ -1,11 +1,13 @@
 #include <stdlib.h>
+#include <string.h>
 
 //
 #include "jf.h"
 #include "list.h"
 
 #define value_i32(n) ((struct value){.tag = JF_i32, .u.__i32 = n})
-#define as_function(v) ((struct function *)v.u.obj)
+#define value_function(f) ((struct value){.tag = JF_function, .u.ptr = f})
+#define as_function(v) ((struct function *)v.u.ptr)
 
 #define read_u8(b) (*b++)
 #define read_u16(b) (b += 2, *(u16 *)b - 2)
@@ -17,22 +19,31 @@ enum tag {
 };
 
 enum opcode {
-  OP_load_const8,
-  OP_load_const16,
-  OP_load,
+  OP_load_const,
+  OP_load_fast,
   OP_load_deref,
-  OP_store,
+  OP_store_fast,
   OP_store_deref,
+  OP_make_ref,
+  OP_make_function,
   OP_call,
   OP_ret,
 };
+
+/* compile time representations */
+
+struct value_def {
+  bool escaped : 1;
+};
+
+/* runtime representations */
 
 struct value {
   enum tag tag;
   union {
     i32 __i32;
     f64 __f64;
-    void *obj;
+    void *ptr;
   } u;
 };
 
@@ -50,35 +61,43 @@ struct map {
   struct value *values;
 };
 
-struct upvalue {
-  struct value *ref;
-  struct value val;
+struct tuple {
+  usize cap;
+  struct value **refs;
+};
+
+struct array {
+  usize cap;
+  usize len;
+  u8 *buf;
 };
 
 struct function {
   struct string name;
   bool is_cfn;
   i8 nargs;
-  usize len;
   union {
-    u8 *codes;
+    struct array *codes;
     struct value (*proto)(struct context *, struct value *, usize);
   } u;
-  struct upvalue *upvals;
-};
-
-struct trace {
-  struct trace *prev;
-  struct function *fn;
-  struct value *vars; // local variables
+  usize nrefs;
+  usize nconsts;
+  struct value *consts;
+  struct value **refs;  // pre-allocated at compile time.
 };
 
 struct context {
   struct list_head node;
   struct value *base;
   struct value *top;
-  struct trace *trace;
   struct runtime *rt;
+};
+
+struct chunk {
+  struct chunk *next;
+  usize rc;  // reference count
+  usize size;
+  void *ptr;
 };
 
 struct runtime {
@@ -90,18 +109,20 @@ struct runtime {
   struct list_head ctx;
   struct map symbols;
   struct allocator allocator;
+  struct chunk *pool[JF_PEXP];  // memory pool divided to chunks of size: 2B,
+                                // 4B, 8B, ..., 1024B.
 };
 
 struct runtime *jf_calloc(struct allocator al, usize n, usize size) {
   struct runtime *rt;
   usize cap = n * size;
-  if (!(rt = al.alloc(sizeof(*rt) + cap)))
-    return NULL;
+  if (!(rt = al.alloc(sizeof(*rt) + cap))) return NULL;
   rt->size = size;
   rt->cap = cap;
-  rt->base = (struct value *)rt + sizeof(*rt);
+  rt->base = (u8*)rt + sizeof(*rt);
   rt->avail = rt->base;
   rt->top = rt->base;
+  memset(rt->pool, 0, JF_PEXP);
   list_head_init(&rt->ctx);
   return rt;
 }
@@ -118,8 +139,7 @@ struct runtime *jf_default() {
 
 struct context *jf_open(struct runtime *rt) {
   struct context *ctx;
-  if (rt->top - rt->base >= rt->cap)
-    return NULL;
+  if (rt->top - rt->base >= rt->cap) return NULL;
   ctx = (struct context *)rt->avail;
   ctx->base = (struct value *)ctx + sizeof(*ctx);
   ctx->top = ctx->base;
@@ -135,19 +155,51 @@ void jf_close(struct runtime *rt, struct context *ctx) {
   list_del(&ctx->node);
 }
 
-static void *allocgc(struct runtime *rt, usize sz) {
-  if (sz > (1 << 10))
-    return rt->allocator.alloc(sz);
-  // TODO: allocate from memory pool if the requested size is less than 1kB.
-}
+// allocgc allocates 'size' bytes from the heap using the runtime allocator if
+// 'size' is bigger than 2^JF_PEXP (default: 1kB), otherwise from the runtime
+// memory pool.
+static void *allocgc(struct context *ctx, usize size) {
+  struct runtime *rt = ctx->rt;
+  struct chunk *hdr;
+  usize bits;  // the number of effective bits of a 32-bit integer.
 
-static void freegc(struct runtime *rt, void *ptr, usize size) {}
-
-static void panic(struct context *ctx, const char fmt, ...) {
-  struct trace *tr;
-  for (tr = ctx->trace; tr = tr->prev; tr) {
+  if (size > (1 << JF_PEXP)) {
+    if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
+      panic(ctx, "out of memory");
+    hdr->size = size;
+    hdr->ptr = (void *)hdr + sizeof(*hdr);
+    return hdr->ptr;
   }
+
+  bits = bits32(size);
+  hdr = rt->pool[bits];
+  if (!hdr) {
+    size = 1 << bits;
+    if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
+      panic(ctx, "out of memory");
+    hdr->size = size;
+    hdr->ptr = (void *)hdr + sizeof(*hdr);
+    return hdr->ptr;
+  }
+
+  rt->pool[bits] = hdr->next;
+  return hdr->ptr;
 }
+
+static void freegc(struct context *ctx, void *ptr) {
+  struct runtime *rt = ctx->rt;
+  struct chunk *hdr = ptr - sizeof(*hdr);
+  usize bits;
+  if (hdr->size > (1 << JF_PEXP)) {
+    rt->allocator.free(hdr);
+    return;
+  }
+  bits = bits32(hdr->size);
+  hdr->next = rt->pool[bits];
+  rt->pool[bits] = hdr;
+}
+
+static void panic(struct context *ctx, const char fmt, ...) {}
 
 static struct value compile(struct context *ctx, const char src) {}
 
@@ -158,9 +210,8 @@ static struct value eval(struct context *ctx, const char src,
 
 static struct value call(struct context *ctx, struct value val,
                          struct value *args, u8 n) {
-  struct function *fn;
-  struct value *top, *vars, ra;
-  struct trace tr;
+  struct function *fn, *rb;
+  struct value *top, *vars, *consts, **refs, ra;
   u8 *pc;
   u32 n;
 
@@ -172,49 +223,58 @@ static struct value call(struct context *ctx, struct value val,
     panic(ctx, "function %s expects %d arguments but %d were given.",
           fn->name.buf, fn->nargs, n);
 
-  if (fn->is_cfn)
-    return fn->u.proto(ctx, args, n);
+  if (fn->is_cfn) return fn->u.proto(ctx, args, n);
 
-  
   top = ctx->top;
   vars = top;
-
-  tr.fn = fn;
-  tr.vars = vars;
-  tr.prev = ctx->trace;
-  ctx->trace = &tr;
-
-  pc = fn->u.codes;
+  consts = fn->consts;
+  refs = fn->refs;
+  pc = fn->u.codes->buf;
 
   for (;;) {
     switch (read_u8(pc)) {
-    case OP_load_const8:
-      n = read_u8(pc);
-      *top++ = value_i32(n);
-      break;
-    case OP_load_const16:
-      n = read_u16(pc);
-      *top++ = value_i32(n);
-      break;
-    case OP_load:
-      n = read_u8(pc);
-      *top++ = *(vars + n);
-      break;
-    case OP_store:
-      n = read_u8(pc);
-      *(vars + n) = *(top - 1); // TODO: do we really have to?
-      break;
-    case OP_call:
-      n = read_u8(pc);
-      ra = *(top - n - 1);
-      ctx->top = top;
-      ra = call(ctx, ra, top - n, n);
-      *top++ = ra; // push
-      break;
-    case OP_ret:
-      ra = *(--top); // pop
-      ctx->trace = tr.prev;
-      return ra;
+      case OP_load_const:
+        n = read_u8(pc);
+        *top++ = consts[n];
+        break;
+      case OP_load_fast:
+        n = read_u8(pc);
+        *top++ = vars[n];
+        break;
+      case OP_load_deref:
+        n = read_u8(pc);
+        *top++ = *refs[n];
+        break;
+      case OP_store_fast:
+        n = read_u8(pc);
+        *(vars + n) = top[-1];  // TODO: do we really have to?
+        break;
+      case OP_store_deref:  // NOTE: this opcode expects that location refs + n
+                            // to have been allocated by opcode OP_make_ref.
+        n = read_u8(pc);
+        **(refs + n) = top[-1];
+        break;
+      case OP_make_ref:
+        n = read_u8(pc);
+        *(refs + n) = allocgc(ctx, sizeof(struct value));
+        break;
+      case OP_make_function:
+        ra = *(--top);
+        rb = as_function(ra);
+        memcpy(rb->refs, fn->refs, fn->nrefs);
+        ra = value_function(rb);
+        *top++ = ra;
+        break;
+      case OP_call:
+        n = read_u8(pc);
+        ra = *(top - n - 1);
+        ctx->top = top;
+        ra = call(ctx, ra, top - n, n);
+        *top++ = ra;  // push
+        break;
+      case OP_ret:
+        ra = *(--top);  // pop
+        return ra;
     }
   }
 }

@@ -25,6 +25,8 @@ extern "C" {
 #define unlikely(x) __builtin_expect(!!(x), 1)
 #endif
 
+#define bits32(x) (32 - __builtin_clz(x))
+
 #ifndef JF_TEST
 #define assert(x) ((void)0)
 #else
@@ -44,6 +46,8 @@ extern "C" {
 #define f64 double
 #define usize size_t
 #define bool u8
+
+#define JF_PEXP 10
 
 struct value;
 
