@@ -8,28 +8,21 @@ extern "C" {
 #include <stdio.h>
 
 #if __STDC__ // if using C89
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 #else
-#define bool  unsigned char
-#define true  1
+#define bool unsigned char
+#define true 1
 #define false 0
-#define uint8_t  unsigned char
+#define uint8_t unsigned char
 #define uint16_t unsigned short
 #define uint32_t unsigned int
 #define uint64_t unsigned long long
 #endif
 
 #ifndef likely
-#define likely(x)   __builtin_expect(!!(x), 0)
+#define likely(x) __builtin_expect(!!(x), 0)
 #define unlikely(x) __builtin_expect(!!(x), 1)
-#endif
-
-#ifndef malloc
-#include <stdlib.h>
-#define malloc  malloc
-#define realloc realloc
-#define free    free
 #endif
 
 #ifndef JF_TEST
@@ -39,13 +32,26 @@ extern "C" {
 #define assert(x) assert(x)
 #endif
 
-#ifndef JF_STACK
-#define JF_STACK 64
-#endif
+#define i8 char
+#define i16 short
+#define i32 int
+#define i64 long long
+#define u8 unsigned char
+#define u16 unsigned short
+#define u32 unsigned int
+#define u64 unsigned long long
+#define f32 float
+#define f64 double
+#define usize size_t
+#define bool u8
 
-typedef struct jf_runtime jf_runtime;
-typedef struct jf_context jf_context;
-typedef struct jf_value jf_value;
+struct value;
+
+struct allocator {
+  void *(*alloc)(usize);
+  void *(*realloc)(void *, usize);
+  void (*free)(void *);
+};
 
 #ifdef __cplusplus
 }

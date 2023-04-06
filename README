@@ -1,7 +1,7 @@
 The JF Programming Language
 ===========================
 
-JF is a programming language built from scratch with lexical scopes and some modern semantics (hopefully). The two letters come from my and my girlfriend's names respectively :) JF has a runtime that is also called the stack-based VM and it looks like as follows:
+JF is a programming language built from scratch with lexical scopes and some modern semantics (hopefully). The two letters come from my and my girlfriend's names respectively :) JF has a stack-based VM called the runtime and it looks like follows:
 
 +-------------------------------------+
 |            runtime (heap)           |

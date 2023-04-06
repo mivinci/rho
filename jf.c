@@ -1,131 +1,220 @@
-#include <string.h>
+#include <stdlib.h>
 
-#include "list.h"
+//
 #include "jf.h"
+#include "list.h"
 
-struct jf_function {};
+#define value_i32(n) ((struct value){.tag = JF_i32, .u.__i32 = n})
+#define as_function(v) ((struct function *)v.u.obj)
 
-struct jf_cfunction {};
+#define read_u8(b) (*b++)
+#define read_u16(b) (b += 2, *(u16 *)b - 2)
 
-struct jf_string {
-  struct jf_string *next;
-  uint32_t hash;
-  size_t len;
-  char buf[1];
+enum tag {
+  JF_i32,
+  JF_f64,
+  JF_function,
 };
 
-struct jf_value {
-  int tag;
+enum opcode {
+  OP_load_const8,
+  OP_load_const16,
+  OP_load,
+  OP_load_deref,
+  OP_store,
+  OP_store_deref,
+  OP_call,
+  OP_ret,
+};
+
+struct value {
+  enum tag tag;
   union {
-    long i32;
-    double f64;
-    struct {
-      bool marked;
-      union {
-        struct jf_string str;
-        struct jf_function fun;
-        struct jf_cfunction cfun;
-      } u;
-    } *obj;
+    i32 __i32;
+    f64 __f64;
+    void *obj;
   } u;
 };
 
-struct table {
-  size_t len;
-  struct jf_string **heads;
+struct string {
+  bool islit;
+  u32 hash;
+  u32 len;
+  u8 buf[1];
 };
 
-struct jf_runtime {
-  struct table table;
-
-  unsigned int cap;
-  unsigned int len;
-  struct list_head ctx;
-  struct jf_value *base;
-  struct jf_value *avail;
-
-  struct list_head errs;
-
-  void *(*alloc)(size_t);
-  void *(*realloc)(void *, size_t);
-  void (*free)(void*);
+struct map {
+  usize cap;
+  usize len;
+  struct value *keys;
+  struct value *values;
 };
 
-struct jf_context {
+struct upvalue {
+  struct value *ref;
+  struct value val;
+};
+
+struct function {
+  struct string name;
+  bool is_cfn;
+  i8 nargs;
+  usize len;
+  union {
+    u8 *codes;
+    struct value (*proto)(struct context *, struct value *, usize);
+  } u;
+  struct upvalue *upvals;
+};
+
+struct trace {
+  struct trace *prev;
+  struct function *fn;
+  struct value *vars; // local variables
+};
+
+struct context {
   struct list_head node;
-  struct jf_runtime *rt;
-  struct jf_value *base;
-  struct jf_value *top;
+  struct value *base;
+  struct value *top;
+  struct trace *trace;
+  struct runtime *rt;
 };
 
-void jf_init(struct jf_runtime *rt, int backlog) {
-  memset(rt, 0, sizeof *rt);
-  int cap = backlog * JF_STACK;
-  rt->base = (struct jf_value *)malloc(sizeof(struct jf_value) * cap);
-  if (unlikely(!rt->base))
-    return; // TODO: should we panic here?
-  rt->cap = cap;
-  rt->avail = rt->base;
-  rt->alloc = malloc;
-  rt->realloc = realloc;
-  rt->free = free;
-  list_head_init(&rt->ctx);
-}
+struct runtime {
+  usize cap;
+  usize size;
+  struct value *base;
+  struct value *avail;
+  struct value *top;
+  struct list_head ctx;
+  struct map symbols;
+  struct allocator allocator;
+};
 
-void jf_throw(struct jf_context *ctx, const char *err) {}
-
-void *jf_alloc(struct jf_context *ctx, size_t size) {
-  void *p = ctx->rt->alloc(size);
-  if (unlikely(!p)) {
-    jf_throw(ctx, "out of memory");
+struct runtime *jf_calloc(struct allocator al, usize n, usize size) {
+  struct runtime *rt;
+  usize cap = n * size;
+  if (!(rt = al.alloc(sizeof(*rt) + cap)))
     return NULL;
-  }
-  return p;
+  rt->size = size;
+  rt->cap = cap;
+  rt->base = (struct value *)rt + sizeof(*rt);
+  rt->avail = rt->base;
+  rt->top = rt->base;
+  list_head_init(&rt->ctx);
+  return rt;
 }
 
-struct jf_context *jf_open(struct jf_runtime *rt) {
-  struct jf_context *ctx;
-  // if the runtime stack is full, extend it to 1.5 its current size.
-  if (rt->len >= rt->cap || rt->avail == rt->base + rt->len) {
-    int cap = rt->cap + rt->cap / 2;
-    rt->base = rt->realloc(rt->base, cap * sizeof(struct jf_value));
-    if (unlikely(!rt->base))
-      return NULL;
-    rt->avail = rt->base + rt->len;
-    rt->cap = cap;
-  }
-  ctx = (struct jf_context *)rt->avail;
-  ctx->base = rt->avail + sizeof(*ctx);
+void jf_free(struct runtime *rt) {
+  struct allocator al = rt->allocator;
+  al.free(rt);
+}
+
+struct runtime *jf_default() {
+  struct allocator al = {.alloc = malloc, .realloc = realloc, .free = free};
+  return jf_calloc(al, 1, 1024);
+}
+
+struct context *jf_open(struct runtime *rt) {
+  struct context *ctx;
+  if (rt->top - rt->base >= rt->cap)
+    return NULL;
+  ctx = (struct context *)rt->avail;
+  ctx->base = (struct value *)ctx + sizeof(*ctx);
   ctx->top = ctx->base;
   ctx->rt = rt;
-  rt->avail = rt->base + rt->len;
-  rt->len++;
   list_add(&rt->ctx, &ctx->node);
+  rt->avail = rt->top;
+  rt->top += rt->size;
   return ctx;
 }
 
-void jf_close(struct jf_context *ctx) {
-  struct jf_runtime *rt = ctx->rt;
-  rt->avail = (struct jf_value *)ctx;
-  rt->len--;
+void jf_close(struct runtime *rt, struct context *ctx) {
+  rt->avail = (struct value *)ctx;
   list_del(&ctx->node);
 }
 
-#ifdef JF_TEST
-
-int main(void)
-{
-  struct jf_runtime rt;
-  struct jf_context *c1, *c2;
-  jf_init(&rt, 1);
-  c1 = jf_open(&rt);
-  assert(c1 != NULL);
-  c2 = jf_open(&rt);
-  assert(c2 != NULL);
-  jf_close(c1);
-  jf_close(c2);
-  return 0;
+static void *allocgc(struct runtime *rt, usize sz) {
+  if (sz > (1 << 10))
+    return rt->allocator.alloc(sz);
+  // TODO: allocate from memory pool if the requested size is less than 1kB.
 }
 
+static void freegc(struct runtime *rt, void *ptr, usize size) {}
 
-#endif
+static void panic(struct context *ctx, const char fmt, ...) {
+  struct trace *tr;
+  for (tr = ctx->trace; tr = tr->prev; tr) {
+  }
+}
+
+static struct value compile(struct context *ctx, const char src) {}
+
+static struct value eval(struct context *ctx, const char src,
+                         struct value *args, u8 n) {
+  return call(ctx, compile(ctx, src), args, n);
+}
+
+static struct value call(struct context *ctx, struct value val,
+                         struct value *args, u8 n) {
+  struct function *fn;
+  struct value *top, *vars, ra;
+  struct trace tr;
+  u8 *pc;
+  u32 n;
+
+  if (val.tag != JF_function)
+    panic(ctx, "type %d is not callable.", val.tag);
+
+  fn = as_function(val);
+  if (fn->nargs > 0 && fn->nargs != n)
+    panic(ctx, "function %s expects %d arguments but %d were given.",
+          fn->name.buf, fn->nargs, n);
+
+  if (fn->is_cfn)
+    return fn->u.proto(ctx, args, n);
+
+  
+  top = ctx->top;
+  vars = top;
+
+  tr.fn = fn;
+  tr.vars = vars;
+  tr.prev = ctx->trace;
+  ctx->trace = &tr;
+
+  pc = fn->u.codes;
+
+  for (;;) {
+    switch (read_u8(pc)) {
+    case OP_load_const8:
+      n = read_u8(pc);
+      *top++ = value_i32(n);
+      break;
+    case OP_load_const16:
+      n = read_u16(pc);
+      *top++ = value_i32(n);
+      break;
+    case OP_load:
+      n = read_u8(pc);
+      *top++ = *(vars + n);
+      break;
+    case OP_store:
+      n = read_u8(pc);
+      *(vars + n) = *(top - 1); // TODO: do we really have to?
+      break;
+    case OP_call:
+      n = read_u8(pc);
+      ra = *(top - n - 1);
+      ctx->top = top;
+      ra = call(ctx, ra, top - n, n);
+      *top++ = ra; // push
+      break;
+    case OP_ret:
+      ra = *(--top); // pop
+      ctx->trace = tr.prev;
+      return ra;
+    }
+  }
+}
