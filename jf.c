@@ -30,12 +30,6 @@ enum opcode {
   OP_ret,
 };
 
-/* compile time representations */
-
-struct value_def {
-  bool escaped : 1;
-};
-
 /* runtime representations */
 
 struct value {
@@ -95,23 +89,69 @@ struct context {
 
 struct chunk {
   struct chunk *next;
-  usize rc;  // reference count
-  usize size;
+  usize rc;    // reference count.
+  usize size;  // size of memory allocated for ptr.
   void *ptr;
 };
 
 struct runtime {
   usize cap;
-  usize size;
+  usize size;  // size of stack allocated for a context.
   struct value *base;
   struct value *avail;
   struct value *top;
+  struct value *symbols;
   struct list_head ctx;
-  struct map symbols;
   struct allocator allocator;
-  struct chunk *pool[JF_PEXP];  // memory pool divided to chunks of size: 2B,
-                                // 4B, 8B, ..., 1024B.
+  struct chunk *chunks[JF_PEXP];  // memory pool divided to chunks of size: 2B,
+                                  // 4B, 8B, ..., 1024B.
 };
+
+/* compile time representations */
+
+struct token {
+
+};
+
+struct var {
+  bool escaped : 1;
+  u32 scope;  // index into proto::scope meaning the scope this variable is in.
+  u32 next;   // index into proto::vars referring to the next variable in the
+              // same scope.
+  u32 name;   // index into runtime::symbols refering to the variable name.
+};
+
+struct scope {
+  u32 first;  // index into proto::var refering to the first variable in this
+              // scope.
+};
+
+struct proto {
+  struct list_head node;
+  struct proto *next;    // points the adjacent proto.
+  struct array codes;    // bytecode of this proto.
+  struct scope *scopes;  // scopes of this proto.
+  struct var *vars;      // variables defined in this proto.
+  struct value *consts;  // constants defined in this proto.
+  usize nscopes;         // the number of scopes defined in this proto.
+  usize nvars;           // the number of variables defined in this proto.
+  usize nconsts;         // the number of constants defined in this proto.
+};
+
+struct compiler {
+  struct token token;
+  struct token ahead;
+  struct proto *proto;
+  struct context *ctx;
+};
+
+int next(struct compiler *c) {
+
+}
+
+int parse(struct compiler *c) {
+  
+}
 
 struct runtime *jf_calloc(struct allocator al, usize n, usize size) {
   struct runtime *rt;
@@ -119,10 +159,10 @@ struct runtime *jf_calloc(struct allocator al, usize n, usize size) {
   if (!(rt = al.alloc(sizeof(*rt) + cap))) return NULL;
   rt->size = size;
   rt->cap = cap;
-  rt->base = (u8*)rt + sizeof(*rt);
+  rt->base = (u8 *)rt + sizeof(*rt);
   rt->avail = rt->base;
   rt->top = rt->base;
-  memset(rt->pool, 0, JF_PEXP);
+  memset(rt->chunks, 0, JF_PEXP);
   list_head_init(&rt->ctx);
   return rt;
 }
@@ -141,7 +181,7 @@ struct context *jf_open(struct runtime *rt) {
   struct context *ctx;
   if (rt->top - rt->base >= rt->cap) return NULL;
   ctx = (struct context *)rt->avail;
-  ctx->base = (struct value *)ctx + sizeof(*ctx);
+  ctx->base = (u8 *)ctx + sizeof(*ctx);
   ctx->top = ctx->base;
   ctx->rt = rt;
   list_add(&rt->ctx, &ctx->node);
@@ -172,7 +212,7 @@ static void *allocgc(struct context *ctx, usize size) {
   }
 
   bits = bits32(size);
-  hdr = rt->pool[bits];
+  hdr = rt->chunks[bits];
   if (!hdr) {
     size = 1 << bits;
     if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
@@ -182,7 +222,7 @@ static void *allocgc(struct context *ctx, usize size) {
     return hdr->ptr;
   }
 
-  rt->pool[bits] = hdr->next;
+  rt->chunks[bits] = hdr->next;
   return hdr->ptr;
 }
 
@@ -195,17 +235,16 @@ static void freegc(struct context *ctx, void *ptr) {
     return;
   }
   bits = bits32(hdr->size);
-  hdr->next = rt->pool[bits];
-  rt->pool[bits] = hdr;
+  hdr->next = rt->chunks[bits];
+  rt->chunks[bits] = hdr;
 }
 
 static void panic(struct context *ctx, const char fmt, ...) {}
 
-static struct value compile(struct context *ctx, const char src) {}
-
 static struct value eval(struct context *ctx, const char src,
                          struct value *args, u8 n) {
-  return call(ctx, compile(ctx, src), args, n);
+  struct function main;
+  return call(ctx, value_function(&main), args, n);
 }
 
 static struct value call(struct context *ctx, struct value val,
@@ -215,8 +254,7 @@ static struct value call(struct context *ctx, struct value val,
   u8 *pc;
   u32 n;
 
-  if (val.tag != JF_function)
-    panic(ctx, "type %d is not callable.", val.tag);
+  if (val.tag != JF_function) panic(ctx, "type %d is not callable.", val.tag);
 
   fn = as_function(val);
   if (fn->nargs > 0 && fn->nargs != n)
@@ -250,7 +288,7 @@ static struct value call(struct context *ctx, struct value val,
         *(vars + n) = top[-1];  // TODO: do we really have to?
         break;
       case OP_store_deref:  // NOTE: this opcode expects that location refs + n
-                            // to have been allocated by opcode OP_make_ref.
+                            // have been allocated by opcode OP_make_ref.
         n = read_u8(pc);
         **(refs + n) = top[-1];
         break;

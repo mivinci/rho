@@ -27,8 +27,10 @@ extern "C" {
 
 #define bits32(x) (32 - __builtin_clz(x))
 
+#define nop ((void)0)
+
 #ifndef JF_TEST
-#define assert(x) ((void)0)
+#define assert(x) nop
 #else
 #include <assert.h>
 #define assert(x) assert(x)
@@ -48,6 +50,9 @@ extern "C" {
 #define bool u8
 
 #define JF_PEXP 10
+
+#define jf_lock(r) nop
+#define jf_unlock(r) nop
 
 struct value;
 
