@@ -15,10 +15,4 @@ Each runtime has more than one contexts and each context has its own stack for f
 
 JF is for learning purposes only and is under really slow development.
 
-Sources:
-
-  jf.c  - JF VM
-  jfc.c - JF compiler POC, will be merged into jf.c
-
-
 MIT licensed.

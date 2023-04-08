@@ -294,7 +294,7 @@ static struct value call(struct context *ctx, struct value val,
     case OP_call:
       arg = read_u8(pc);
       ra = *(top - arg - 1);
-      ctx->top = top - arg;
+      ctx->top = top;
       ra = call(ctx, ra, top - arg, arg);
       *top++ = ra; // push
       break;
