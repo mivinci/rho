@@ -66,6 +66,13 @@ struct array {
   u8 *buf;
 };
 
+struct context {
+  struct list_head node;
+  struct value *base;
+  struct value *top;
+  struct runtime *rt;
+};
+
 struct function {
   struct string name;
   bool is_cfn;
@@ -77,65 +84,56 @@ struct function {
   usize nrefs;
   usize nconsts;
   struct value *consts;
-  struct value **refs;  // pre-allocated at compile time.
-};
-
-struct context {
-  struct list_head node;
-  struct value *base;
-  struct value *top;
-  struct runtime *rt;
+  struct value **refs; // pre-allocated at compile time.
 };
 
 struct chunk {
   struct chunk *next;
-  usize rc;    // reference count.
-  usize size;  // size of memory allocated for ptr.
+  usize rc;   // reference count.
+  usize size; // size of memory allocated for ptr.
   void *ptr;
 };
 
 struct runtime {
   usize cap;
-  usize size;  // size of stack allocated for a context.
+  usize size; // size of stack allocated for a context.
   struct value *base;
   struct value *avail;
   struct value *top;
   struct value *symbols;
   struct list_head ctx;
   struct allocator allocator;
-  struct chunk *chunks[JF_PEXP];  // memory pool divided to chunks of size: 2B,
-                                  // 4B, 8B, ..., 1024B.
+  struct chunk *chunks[JF_PEXP]; // memory pool divided to chunks of size: 2B,
+                                 // 4B, 8B, ..., 1024B.
 };
 
 /* compile time representations */
 
-struct token {
-
-};
+struct token {};
 
 struct var {
   bool escaped : 1;
-  u32 scope;  // index into proto::scope meaning the scope this variable is in.
-  u32 next;   // index into proto::vars referring to the next variable in the
-              // same scope.
-  u32 name;   // index into runtime::symbols refering to the variable name.
+  u32 scope; // index into proto::scope meaning the scope this variable is in.
+  u32 next;  // index into proto::vars referring to the next variable in the
+             // same scope.
+  u32 name;  // index into runtime::symbols refering to the variable name.
 };
 
 struct scope {
-  u32 first;  // index into proto::var refering to the first variable in this
-              // scope.
+  u32 first; // index into proto::var refering to the first variable in this
+             // scope.
 };
 
 struct proto {
   struct list_head node;
-  struct proto *next;    // points the adjacent proto.
-  struct array codes;    // bytecode of this proto.
-  struct scope *scopes;  // scopes of this proto.
-  struct var *vars;      // variables defined in this proto.
-  struct value *consts;  // constants defined in this proto.
-  usize nscopes;         // the number of scopes defined in this proto.
-  usize nvars;           // the number of variables defined in this proto.
-  usize nconsts;         // the number of constants defined in this proto.
+  struct proto *next;   // points the adjacent proto.
+  struct array codes;   // bytecode of this proto.
+  struct scope *scopes; // scopes of this proto.
+  struct var *vars;     // variables defined in this proto.
+  struct value *consts; // constants defined in this proto.
+  usize nscopes;        // the number of scopes defined in this proto.
+  usize nvars;          // the number of variables defined in this proto.
+  usize nconsts;        // the number of constants defined in this proto.
 };
 
 struct compiler {
@@ -145,21 +143,14 @@ struct compiler {
   struct context *ctx;
 };
 
-int next(struct compiler *c) {
-
-}
-
-int parse(struct compiler *c) {
-  
-}
-
 struct runtime *jf_calloc(struct allocator al, usize n, usize size) {
   struct runtime *rt;
   usize cap = n * size;
-  if (!(rt = al.alloc(sizeof(*rt) + cap))) return NULL;
+  if (!(rt = al.alloc(sizeof(*rt) + cap)))
+    return NULL;
   rt->size = size;
   rt->cap = cap;
-  rt->base = (u8 *)rt + sizeof(*rt);
+  rt->base = (struct value*)(u8 *)rt + sizeof(*rt);
   rt->avail = rt->base;
   rt->top = rt->base;
   memset(rt->chunks, 0, JF_PEXP);
@@ -179,9 +170,10 @@ struct runtime *jf_default() {
 
 struct context *jf_open(struct runtime *rt) {
   struct context *ctx;
-  if (rt->top - rt->base >= rt->cap) return NULL;
+  if (rt->top - rt->base >= rt->cap)
+    return NULL;
   ctx = (struct context *)rt->avail;
-  ctx->base = (u8 *)ctx + sizeof(*ctx);
+  ctx->base = (struct value*)(u8 *)ctx + sizeof(*ctx);
   ctx->top = ctx->base;
   ctx->rt = rt;
   list_add(&rt->ctx, &ctx->node);
@@ -195,13 +187,15 @@ void jf_close(struct runtime *rt, struct context *ctx) {
   list_del(&ctx->node);
 }
 
+static void panic(struct context *ctx, const char *fmt, ...) {}
+
 // allocgc allocates 'size' bytes from the heap using the runtime allocator if
 // 'size' is bigger than 2^JF_PEXP (default: 1kB), otherwise from the runtime
 // memory pool.
 static void *allocgc(struct context *ctx, usize size) {
   struct runtime *rt = ctx->rt;
   struct chunk *hdr;
-  usize bits;  // the number of effective bits of a 32-bit integer.
+  usize bits; // the number of effective bits of a 32-bit integer.
 
   if (size > (1 << JF_PEXP)) {
     if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
@@ -239,29 +233,23 @@ static void freegc(struct context *ctx, void *ptr) {
   rt->chunks[bits] = hdr;
 }
 
-static void panic(struct context *ctx, const char fmt, ...) {}
-
-static struct value eval(struct context *ctx, const char src,
-                         struct value *args, u8 n) {
-  struct function main;
-  return call(ctx, value_function(&main), args, n);
-}
-
 static struct value call(struct context *ctx, struct value val,
                          struct value *args, u8 n) {
   struct function *fn, *rb;
   struct value *top, *vars, *consts, **refs, ra;
   u8 *pc;
-  u32 n;
+  u32 arg;
 
-  if (val.tag != JF_function) panic(ctx, "type %d is not callable.", val.tag);
+  if (val.tag != JF_function)
+    panic(ctx, "type %d is not callable.", val.tag);
 
   fn = as_function(val);
   if (fn->nargs > 0 && fn->nargs != n)
     panic(ctx, "function %s expects %d arguments but %d were given.",
           fn->name.buf, fn->nargs, n);
 
-  if (fn->is_cfn) return fn->u.proto(ctx, args, n);
+  if (fn->is_cfn)
+    return fn->u.proto(ctx, args, n);
 
   top = ctx->top;
   vars = top;
@@ -271,48 +259,54 @@ static struct value call(struct context *ctx, struct value val,
 
   for (;;) {
     switch (read_u8(pc)) {
-      case OP_load_const:
-        n = read_u8(pc);
-        *top++ = consts[n];
-        break;
-      case OP_load_fast:
-        n = read_u8(pc);
-        *top++ = vars[n];
-        break;
-      case OP_load_deref:
-        n = read_u8(pc);
-        *top++ = *refs[n];
-        break;
-      case OP_store_fast:
-        n = read_u8(pc);
-        *(vars + n) = top[-1];  // TODO: do we really have to?
-        break;
-      case OP_store_deref:  // NOTE: this opcode expects that location refs + n
-                            // have been allocated by opcode OP_make_ref.
-        n = read_u8(pc);
-        **(refs + n) = top[-1];
-        break;
-      case OP_make_ref:
-        n = read_u8(pc);
-        *(refs + n) = allocgc(ctx, sizeof(struct value));
-        break;
-      case OP_make_function:
-        ra = *(--top);
-        rb = as_function(ra);
-        memcpy(rb->refs, fn->refs, fn->nrefs);
-        ra = value_function(rb);
-        *top++ = ra;
-        break;
-      case OP_call:
-        n = read_u8(pc);
-        ra = *(top - n - 1);
-        ctx->top = top;
-        ra = call(ctx, ra, top - n, n);
-        *top++ = ra;  // push
-        break;
-      case OP_ret:
-        ra = *(--top);  // pop
-        return ra;
+    case OP_load_const:
+      n = read_u8(pc);
+      *top++ = consts[n];
+      break;
+    case OP_load_fast:
+      n = read_u8(pc);
+      *top++ = vars[n];
+      break;
+    case OP_load_deref:
+      n = read_u8(pc);
+      *top++ = *refs[n];
+      break;
+    case OP_store_fast:
+      n = read_u8(pc);
+      *(vars + n) = top[-1]; // TODO: do we really have to?
+      break;
+    case OP_store_deref: // NOTE: this opcode expects that location refs + n
+                         // have been allocated by opcode OP_make_ref.
+      n = read_u8(pc);
+      **(refs + n) = top[-1];
+      break;
+    case OP_make_ref:
+      n = read_u8(pc);
+      *(refs + n) = allocgc(ctx, sizeof(struct value));
+      break;
+    case OP_make_function:
+      ra = *(--top);
+      rb = as_function(ra);
+      memcpy(rb->refs, fn->refs, fn->nrefs);
+      ra = value_function(rb);
+      *top++ = ra;
+      break;
+    case OP_call:
+      n = read_u8(pc);
+      ra = *(top - n - 1);
+      ctx->top = top;
+      ra = call(ctx, ra, top - n, n);
+      *top++ = ra; // push
+      break;
+    case OP_ret:
+      ra = *(--top); // pop
+      return ra;
     }
   }
+}
+
+static struct value eval(struct context *ctx, const char src,
+                         struct value *args, u8 n) {
+  struct function main;
+  return call(ctx, value_function(&main), args, n);
 }
