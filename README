@@ -1,7 +1,7 @@
-The JF Programming Language
-===========================
+The Rho Programming Language
+============================
 
-JF is a programming language built from scratch with lexical scoping and some modern semantics (hopefully). The two letters come from my and my girlfriend's names respectively :) JF has a stack-based VM called the runtime and it looks like follows:
+Rho (aka ρ) is an embedding programming language with lexical scoping and some modern semantics (hopefully). Rho has a stack-based VM called the Rho runtime and it looks like follows:
 
 +-------------------------------------+
 |            runtime (heap)           |
@@ -11,8 +11,8 @@ JF is a programming language built from scratch with lexical scoping and some mo
 | +---------+ +---------+ +---------+ |
 +-------------------------------------+
 
-Each runtime has more than one contexts and each context has its own stack for function calls and local variables. The runtime also maintains a global heap space for objects allocated out of stacks and does garbage collection. Contexts are scheduled by the runtime to execute bytecodes concurrently.
+A Rho runtime has more than one contexts and each context has its own stack for function calls and local variables. The runtime also maintains a global memory pool for objects less than 1kB and does garbage collection. Contexts are also scheduled by the runtime to execute bytecodes concurrently.
 
-JF is for learning purposes only and is under really slow development.
+Rho is for learning purposes only and is under really slow development.
 
 MIT licensed.
