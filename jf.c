@@ -260,29 +260,29 @@ static struct value call(struct context *ctx, struct value val,
   for (;;) {
     switch (read_u8(pc)) {
     case OP_load_const:
-      n = read_u8(pc);
-      *top++ = consts[n];
+      arg = read_u8(pc);
+      *top++ = consts[arg];
       break;
     case OP_load_fast:
-      n = read_u8(pc);
-      *top++ = vars[n];
+      arg = read_u8(pc);
+      *top++ = vars[arg];
       break;
     case OP_load_deref:
-      n = read_u8(pc);
-      *top++ = *refs[n];
+      arg = read_u8(pc);
+      *top++ = *refs[arg];
       break;
     case OP_store_fast:
-      n = read_u8(pc);
-      *(vars + n) = top[-1]; // TODO: do we really have to?
+      arg = read_u8(pc);
+      *(vars + arg) = top[-1]; // TODO: do we really have to?
       break;
     case OP_store_deref: // NOTE: this opcode expects that location refs + n
                          // have been allocated by opcode OP_make_ref.
-      n = read_u8(pc);
-      **(refs + n) = top[-1];
+      arg = read_u8(pc);
+      **(refs + arg) = top[-1];
       break;
     case OP_make_ref:
-      n = read_u8(pc);
-      *(refs + n) = allocgc(ctx, sizeof(struct value));
+      arg = read_u8(pc);
+      *(refs + arg) = allocgc(ctx, sizeof(struct value));
       break;
     case OP_make_function:
       ra = *(--top);
@@ -292,10 +292,10 @@ static struct value call(struct context *ctx, struct value val,
       *top++ = ra;
       break;
     case OP_call:
-      n = read_u8(pc);
-      ra = *(top - n - 1);
-      ctx->top = top;
-      ra = call(ctx, ra, top - n, n);
+      arg = read_u8(pc);
+      ra = *(top - arg - 1);
+      ctx->top = top - arg;
+      ra = call(ctx, ra, top - arg, arg);
       *top++ = ra; // push
       break;
     case OP_ret:
