@@ -37,9 +37,9 @@ main: load_const   0 (1)
       add
 */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <string.h>
 
 #include "list.h"
@@ -76,7 +76,7 @@ main: load_const   0 (1)
 
 #define tag(v) (v->tag)
 
-#define header(p) ((struct header*)((char*)(p)-sizeof(struct header)))
+#define header(p) ((struct header *)((char *)(p) - sizeof(struct header)))
 #define cap(p) (header(p)->cap)
 #define len(p) (header(p)->len)
 #define cap_expect(p) (1 << bits32(sizeof(*(p))))
@@ -199,9 +199,7 @@ struct runtime *rho_new(struct allocator al) {
   return rt;
 }
 
-void rho_drop(struct runtime *rt) {
-  rt->allocator.free(rt);
-}
+void rho_drop(struct runtime *rt) { rt->allocator.free(rt); }
 
 struct runtime *rho_default() {
   struct allocator al = {.alloc = malloc, .realloc = realloc, .free = free};
@@ -211,10 +209,10 @@ struct runtime *rho_default() {
 struct context *rho_open(struct runtime *rt, usize size) {
   struct context *ctx;
   void *ptr;
-  if (!(ptr = rt->allocator.alloc(size+sizeof(*ctx))))
+  if (!(ptr = rt->allocator.alloc(size + sizeof(*ctx))))
     return NULL;
-  ctx = (struct context*)ptr;
-  ctx->base = (struct value*)(ptr + sizeof(*ctx));
+  ctx = (struct context *)ptr;
+  ctx->base = (struct value *)(ptr + sizeof(*ctx));
   ctx->top = ctx->base;
   ctx->openrefs = NULL;
   ctx->rt = rt;
@@ -232,11 +230,11 @@ static void *allocgc(struct context *ctx, usize size) {
   struct header *hdr;
   usize bits;
   if (size > (1 << RHO_PMAX)) {
-    if (!(hdr = rt->allocator.alloc(size+sizeof(*hdr))))
+    if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
       rho_panic(ctx, "out of memory");
     memset(hdr, 0, sizeof(*hdr));
     hdr->cap = size;
-    hdr->ptr = (void*)(hdr+1);
+    hdr->ptr = (void *)(hdr + 1);
     return hdr->ptr;
   }
   rho_lock(ctx);
@@ -244,11 +242,11 @@ static void *allocgc(struct context *ctx, usize size) {
   hdr = rt->allocated[bits];
   if (!hdr) {
     size = 1 << bits;
-    if (!(hdr = rt->allocator.alloc(size+sizeof(*hdr))))
+    if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
       rho_panic(ctx, "out of memory");
     memset(hdr, 0, sizeof(*hdr));
     hdr->cap = size;
-    hdr->ptr = (void*)(hdr+1);
+    hdr->ptr = (void *)(hdr + 1);
     rho_unlock(ctx);
     return hdr->ptr;
   }
@@ -349,10 +347,7 @@ int call(struct context *ctx, int nargs) {
   }
 }
 
-
-int parse(struct parser *ps) {
-  return 0;
-}
+int parse(struct parser *ps) { return 0; }
 
 int eval(struct context *ctx, const char *s, usize n) {
   struct parser ps;
@@ -367,6 +362,7 @@ int eval(struct context *ctx, const char *s, usize n) {
   return call(ctx, 1);
 }
 
+#ifdef TEST_ALLOC
 #include <assert.h>
 
 int main() {
@@ -393,3 +389,4 @@ int main() {
   rho_drop(rt);
   return 0;
 }
+#endif

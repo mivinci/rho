@@ -1,19 +1,11 @@
-CC=gcc
-AR=ar rcs
-RM=rm
-CFLAGS=-Wall
-LIB=jf.a
-OBJ=jf.o
-PREFIX=/usr/local
+lex.yy.c: rho.l
+    lex rho.l
 
-all: $(LIB)
+lex.yy.c: rho.y
+    yacc -d rho.y
 
-$(LIB): $(OBJ)
-	$(AR) $@ $?
+rho: lex.yy.c lex.yy.c
+    cc -Wall -o rho lex.yy.c lex.yy.c rho.c
 
 clean:
-	$(RM) $(OBJ) $(LIB)
-
-install:
-	cp jf.h $(PREFIX)/include
-	cp $(LIB) $(PREFIX)/lib
+    rm *.yy.c *.tab.*
