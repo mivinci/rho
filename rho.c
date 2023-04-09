@@ -33,6 +33,7 @@ c:    load_var     0 (z)
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
 
 #include "list.h"
 
@@ -61,14 +62,17 @@ c:    load_var     0 (z)
 #define protovalue(p) anyvalue(p, RHO_PROTO)
 #define cprotovalue(p) anyvalue(p, RHO_CPROTO)
 
-#define getany(v, t) ((t)(v)->u.ptr)
-#define getclosure(v) getany(v, struct closure *)
-#define getproto(v) getany(v, struct proto *)
-#define getcproto(v) getany(v, cproto)
-
-#define getheader(p) ((struct header*)((p)-sizeof(struct header)))
+#define getany(p, t) ((t)(p)->u.ptr)
+#define getclosure(p) getany(p, struct closure *)
+#define getproto(p) getany(p, struct proto *)
+#define getcproto(p) getany(p, cproto)
 
 #define tag(v) (v->tag)
+
+#define header(p) ((struct header*)((char*)(p)-sizeof(struct header)))
+#define cap(p) (header(p)->cap)
+#define len(p) (header(p)->len)
+#define cap_expect(p) (1 << bits32(sizeof(*(p))))
 
 #define bits32(x) (32 - __builtin_clz(x))
 
@@ -216,7 +220,7 @@ static void *allocgc(struct context *ctx, usize size) {
   if (size > (1 << RHO_PMAX)) {
     if (!(hdr = rt->allocator.alloc(size+sizeof(*hdr))))
       rho_panic(ctx, "out of memory");
-    hdr->len = 0;
+    memset(hdr, 0, sizeof(*hdr));
     hdr->cap = size;
     hdr->ptr = (void*)(hdr+1);
     return hdr->ptr;
@@ -228,12 +232,13 @@ static void *allocgc(struct context *ctx, usize size) {
     size = 1 << bits;
     if (!(hdr = rt->allocator.alloc(size+sizeof(*hdr))))
       rho_panic(ctx, "out of memory");
-    hdr->len = 0;
+    memset(hdr, 0, sizeof(*hdr));
     hdr->cap = size;
     hdr->ptr = (void*)(hdr+1);
     rho_unlock(ctx);
     return hdr->ptr;
   }
+  hdr->len = hdr->rc = 0;
   rt->allocated[bits] = hdr->next;
   rho_unlock(ctx);
   return hdr->ptr;
@@ -241,7 +246,7 @@ static void *allocgc(struct context *ctx, usize size) {
 
 static void freegc(struct context *ctx, void *ptr) {
   struct runtime *rt = ctx->rt;
-  struct header *hdr = getheader(ptr);
+  struct header *hdr = header(ptr);
   usize bits;
   if (hdr->cap > (1 << RHO_PMAX)) {
     rt->allocator.free(hdr);
@@ -333,7 +338,8 @@ int call(struct context *ctx, int nargs) {
 #include <assert.h>
 
 int main() {
-  printf("Hello, Rho!\n");
+  printf("Hello, Rho :)\n");
+
   struct runtime *rt;
   struct context *c1, *c2;
 
@@ -347,10 +353,7 @@ int main() {
   struct var *v;
   v = rho_alloc(c1, struct var);
   assert(v);
-
-  struct header *hdr = getheader(v);
-  assert(hdr->cap == (1 << bits32(sizeof(*v))));
-
+  assert(cap(v) == cap_expect(v));
   rho_free(c1, v);
 
   rho_close(c2);
