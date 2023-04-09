@@ -28,6 +28,13 @@ c:    load_var     0 (z)
       add
       add
       ret
+
+
+1+2
+
+main: load_const   0 (1)
+      load_const   1 (2)
+      add
 */
 
 #include <stdio.h>
@@ -113,6 +120,11 @@ struct allocator {
   void (*free)(void *);
 };
 
+struct parser {
+  struct context *ctx;
+  struct proto *proto;
+};
+
 // compile time structs
 
 struct var {
@@ -125,11 +137,13 @@ struct var {
 
 struct proto {
   u32 name;           // index into runtime::symbols.
+  usize np;           // number of child-protos.
   usize nbuf;         // number of bytecodes.
   usize ncons;        // number of constants.
   usize nrefs;        // number of references.
   usize nargs;        // number of arguments.
   usize nlocs;        // number of local variables.
+  struct proto **p;   // child-protos defined in this proto.
   struct value *cons; // constants defined in this proto.
   struct var *refs;   // references appeared in this proto.
   struct var *vars;   // variables (arguments and local variables)
@@ -333,6 +347,24 @@ int call(struct context *ctx, int nargs) {
       return top - base;
     }
   }
+}
+
+
+int parse(struct parser *ps) {
+  return 0;
+}
+
+int eval(struct context *ctx, const char *s, usize n) {
+  struct parser ps;
+  struct proto *proto;
+  int err;
+  proto = rho_alloc(ctx, struct proto);
+  ps.proto = proto;
+  ps.ctx = ctx;
+  if ((err = parse(&ps)) < 0)
+    return err;
+  *ctx->top++ = closure(ctx, proto, NULL, ctx->base);
+  return call(ctx, 1);
 }
 
 #include <assert.h>
