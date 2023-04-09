@@ -31,6 +31,10 @@ c:    load_var     0 (z)
 */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+#include "list.h"
 
 #define u8 unsigned char
 #define u16 unsigned short
@@ -45,12 +49,12 @@ c:    load_var     0 (z)
 
 #define rho_allocex(c, t, e) ((t *)allocgc(c, sizeof(t) + e))
 #define rho_alloc(c, t) rho_allocex(c, t, 0)
-#define rho_free(c, p) (freegc(c, p))
+#define rho_free(c, p) freegc(c, p)
 
 #define rho_lock(c) nop
 #define rho_unlock(c) nop
 
-#define rho_panic(c, ...) c->rt->panic(c, __VA_ARGS__)
+#define rho_panic(c, ...) panic(c, __VA_ARGS__)
 
 #define anyvalue(p, t) ((struct value){.tag = t, .u.ptr = p})
 #define closurevalue(p) anyvalue(p, RHO_CLOSURE)
@@ -62,7 +66,11 @@ c:    load_var     0 (z)
 #define getproto(v) getany(v, struct proto *)
 #define getcproto(v) getany(v, cproto)
 
+#define getheader(p) ((struct header*)((p)-sizeof(struct header)))
+
 #define tag(v) (v->tag)
+
+#define bits32(x) (32 - __builtin_clz(x))
 
 enum opcode {
   OP_closure,
@@ -79,11 +87,14 @@ enum tag {
 struct value {
   enum tag tag;
   union {
+    i64 i;
+    f64 r;
     void *ptr;
   } u;
 };
 
 struct header {
+  struct header *next;
   u8 marked : 1;
   u8 color : 2;
   usize rc;  // reference count.
@@ -136,6 +147,7 @@ struct closure {
 };
 
 struct context {
+  struct list_head node;
   struct runtime *rt;
   struct ref *openrefs;
   struct value *base;
@@ -143,26 +155,102 @@ struct context {
 };
 
 struct runtime {
-  struct context *threads;
+  struct list_head threads;
   struct allocator allocator;
   struct header *allocated[RHO_PMAX];
-  void (*panic)(struct context *, const char *, ...);
 };
 
 typedef int (*cproto)(struct context *, int);
 
-static void *allocgc(struct context *ctx, usize size) {
-  struct header *hdr;
-  rho_lock(ctx);
+void static panic(struct context *ctx, const char *fmt, ...) {
+  // TODO: do stack frame traceback via ctx.
+  va_list ap;
+  va_start(ap, fmt);
+  vfprintf(stderr, fmt, ap);
+  putc('\n', stderr);
+  va_end(ap);
+  exit(1);
+}
 
+struct runtime *rho_new(struct allocator al) {
+  struct runtime *rt;
+  if (!(rt = al.alloc(sizeof(*rt))))
+    return NULL;
+  rt->allocator = al;
+  list_head_init(&rt->threads);
+  return rt;
+}
+
+void rho_drop(struct runtime *rt) {
+  rt->allocator.free(rt);
+}
+
+struct runtime *rho_default() {
+  struct allocator al = {.alloc = malloc, .realloc = realloc, .free = free};
+  return rho_new(al);
+}
+
+struct context *rho_open(struct runtime *rt, usize size) {
+  struct context *ctx;
+  void *ptr;
+  if (!(ptr = rt->allocator.alloc(size+sizeof(*ctx))))
+    return NULL;
+  ctx = (struct context*)ptr;
+  ctx->base = (struct value*)(ptr + sizeof(*ctx));
+  ctx->top = ctx->base;
+  ctx->openrefs = NULL;
+  ctx->rt = rt;
+  list_add(&ctx->node, &rt->threads);
+  return ctx;
+}
+
+void rho_close(struct context *ctx) {
+  list_del(&ctx->node);
+  ctx->rt->allocator.free(ctx);
+}
+
+static void *allocgc(struct context *ctx, usize size) {
+  struct runtime *rt = ctx->rt;
+  struct header *hdr;
+  usize bits;
+  if (size > (1 << RHO_PMAX)) {
+    if (!(hdr = rt->allocator.alloc(size+sizeof(*hdr))))
+      rho_panic(ctx, "out of memory");
+    hdr->len = 0;
+    hdr->cap = size;
+    hdr->ptr = (void*)(hdr+1);
+    return hdr->ptr;
+  }
+  rho_lock(ctx);
+  bits = bits32(size);
+  hdr = rt->allocated[bits];
+  if (!hdr) {
+    size = 1 << bits;
+    if (!(hdr = rt->allocator.alloc(size+sizeof(*hdr))))
+      rho_panic(ctx, "out of memory");
+    hdr->len = 0;
+    hdr->cap = size;
+    hdr->ptr = (void*)(hdr+1);
+    rho_unlock(ctx);
+    return hdr->ptr;
+  }
+  rt->allocated[bits] = hdr->next;
   rho_unlock(ctx);
   return hdr->ptr;
 }
 
 static void freegc(struct context *ctx, void *ptr) {
-  struct header *hdr;
+  struct runtime *rt = ctx->rt;
+  struct header *hdr = getheader(ptr);
+  usize bits;
+  if (hdr->cap > (1 << RHO_PMAX)) {
+    rt->allocator.free(hdr);
+    return;
+  }
+  bits = bits32(hdr->cap);
   rho_lock(ctx);
-
+  hdr->next = rt->allocated[bits];
+  rt->allocated[bits] = hdr;
   rho_unlock(ctx);
 }
 
@@ -242,7 +330,31 @@ int call(struct context *ctx, int nargs) {
   }
 }
 
+#include <assert.h>
+
 int main() {
   printf("Hello, Rho!\n");
+  struct runtime *rt;
+  struct context *c1, *c2;
+
+  rt = rho_default();
+  assert(rt);
+  c1 = rho_open(rt, 32);
+  assert(c1);
+  c2 = rho_open(rt, 8);
+  assert(c2);
+
+  struct var *v;
+  v = rho_alloc(c1, struct var);
+  assert(v);
+
+  struct header *hdr = getheader(v);
+  assert(hdr->cap == (1 << bits32(sizeof(*v))));
+
+  rho_free(c1, v);
+
+  rho_close(c2);
+  rho_close(c1);
+  rho_drop(rt);
   return 0;
 }
