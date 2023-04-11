@@ -41,20 +41,22 @@ main: load_const   0 (1)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "list.h"
 
 #define u8 unsigned char
 #define u16 unsigned short
 #define u32 unsigned int
-#define i64 long long
-#define f64 double
+#define i32 long
+#define f32 double
 #define usize size_t
 
 #define RHO_PMAX 10
 
 #define nop ((void)0)
 
+#define rho_allocator ((struct allocator){malloc, realloc, free})
 #define rho_allocex(c, t, e) ((t *)allocgc(c, sizeof(t) + e))
 #define rho_alloc(c, t) rho_allocex(c, t, 0)
 #define rho_free(c, p) freegc(c, p)
@@ -64,15 +66,23 @@ main: load_const   0 (1)
 
 #define rho_panic(c, ...) panic(c, __VA_ARGS__)
 
+#define rho_push(c, v) (*c->top++ = v)
+#define rho_pop(c) (*(--c->top))
+
 #define anyvalue(p, t) ((struct value){.tag = t, .u.ptr = p})
 #define closurevalue(p) anyvalue(p, RHO_CLOSURE)
 #define protovalue(p) anyvalue(p, RHO_PROTO)
 #define cprotovalue(p) anyvalue(p, RHO_CPROTO)
+#define intvalue(v) ((struct value){.tag = RHO_INT, .u.i = v})
+#define fltvalue(v) ((struct value){.tag = RHO_FLT, .u.r = v})
+
 
 #define getany(p, t) ((t)(p)->u.ptr)
 #define getclosure(p) getany(p, struct closure *)
 #define getproto(p) getany(p, struct proto *)
 #define getcproto(p) getany(p, cproto)
+#define getint(p) ((i32)(p)->u.i)
+#define getflt(p) ((f32)(p)->u.r)
 
 #define tag(v) (v->tag)
 
@@ -83,13 +93,28 @@ main: load_const   0 (1)
 
 #define bits32(x) (32 - __builtin_clz(x))
 
+
+enum token {
+  TK_UNKNOWN,
+  TK_EOF,
+
+};
+
 enum opcode {
-  OP_closure,
-  OP_call,
-  OP_ret,
+  OP_print,   // for debuging, will be removed.
+  OP_closure, // pops TOS and use it to create a closure instance onto the stack.
+  OP_call,    // call TOS.
+  OP_ret,     // returns to the previous stack frame.
+  OP_pushv,   // pushes a variable from var[i] onto the stack.
+  OP_pushc,   // pushes a constant from cons[i] onto the stack.
+  OP_pushr,   // pushes a reference from ref[i] onto the stack.
+  OP_popv,    // pops TOS out to var[i].
+  OP_popr,    // pops TOS out to ref[i].
 };
 
 enum tag {
+  RHO_INT,
+  RHO_FLT,
   RHO_PROTO,
   RHO_CPROTO,
   RHO_CLOSURE,
@@ -98,8 +123,8 @@ enum tag {
 struct value {
   enum tag tag;
   union {
-    i64 i;
-    f64 r;
+    i32 i;
+    f32 r;
     void *ptr;
   } u;
 };
@@ -109,8 +134,7 @@ struct header {
   u8 marked : 1;
   u8 color : 2;
   usize rc;  // reference count.
-  usize cap; // size allocated for ptr.
-  usize len; // size used by ptr.
+  usize size; // size allocated for ptr.
   void *ptr;
 };
 
@@ -120,9 +144,21 @@ struct allocator {
   void (*free)(void *);
 };
 
+struct tokinfo {
+  u8 len;
+  union {
+    i32 i;
+    f32 r;
+    char *s;
+  } u;
+};
+
 struct parser {
   struct context *ctx;
   struct proto *proto;
+  enum token token;
+  enum token ahead;
+  const char *buf;
 };
 
 // compile time structs
@@ -180,7 +216,7 @@ struct runtime {
 
 typedef int (*cproto)(struct context *, int);
 
-void static panic(struct context *ctx, const char *fmt, ...) {
+static void panic(struct context *ctx, const char *fmt, ...) {
   // TODO: do stack frame traceback via ctx.
   va_list ap;
   va_start(ap, fmt);
@@ -200,11 +236,6 @@ struct runtime *rho_new(struct allocator al) {
 }
 
 void rho_drop(struct runtime *rt) { rt->allocator.free(rt); }
-
-struct runtime *rho_default() {
-  struct allocator al = {.alloc = malloc, .realloc = realloc, .free = free};
-  return rho_new(al);
-}
 
 struct context *rho_open(struct runtime *rt, usize size) {
   struct context *ctx;
@@ -233,7 +264,7 @@ static void *allocgc(struct context *ctx, usize size) {
     if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
       rho_panic(ctx, "out of memory");
     memset(hdr, 0, sizeof(*hdr));
-    hdr->cap = size;
+    hdr->size = size;
     hdr->ptr = (void *)(hdr + 1);
     return hdr->ptr;
   }
@@ -245,12 +276,12 @@ static void *allocgc(struct context *ctx, usize size) {
     if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
       rho_panic(ctx, "out of memory");
     memset(hdr, 0, sizeof(*hdr));
-    hdr->cap = size;
+    hdr->size = size;
     hdr->ptr = (void *)(hdr + 1);
     rho_unlock(ctx);
     return hdr->ptr;
   }
-  hdr->len = hdr->rc = 0;
+  hdr->rc = 0;
   rt->allocated[bits] = hdr->next;
   rho_unlock(ctx);
   return hdr->ptr;
@@ -260,11 +291,11 @@ static void freegc(struct context *ctx, void *ptr) {
   struct runtime *rt = ctx->rt;
   struct header *hdr = header(ptr);
   usize bits;
-  if (hdr->cap > (1 << RHO_PMAX)) {
+  if (hdr->size > (1 << RHO_PMAX)) {
     rt->allocator.free(hdr);
     return;
   }
-  bits = bits32(hdr->cap);
+  bits = bits32(hdr->size);
   rho_lock(ctx);
   hdr->next = rt->allocated[bits];
   rt->allocated[bits] = hdr;
@@ -312,13 +343,25 @@ void closerefs(struct context *ctx, struct value *level) {
   }
 }
 
+static void println(struct value *v) {
+  switch (tag(v)) {
+  case RHO_INT:
+    printf("%ld\n", getint(v));
+    break;
+  case RHO_FLT:
+    printf("%f\n", getflt(v));
+    break;
+  default:
+    printf("<object 0x%p>\n", getany(v, void*));
+  }
+}
+
 // Given the number of input arguments nargs, call calls TOS and returns the
 // number of output arguments, therefore, the base is top - nargs, input
 // arguments are [base, top) and the output arguments are [base, n).
 int call(struct context *ctx, int nargs) {
   struct value *top, *base, *val;
   struct closure *cls;
-  struct ref **refs;
   u8 *pc;
   top = ctx->top;
   base = top - nargs;
@@ -331,11 +374,13 @@ int call(struct context *ctx, int nargs) {
   if (cls->proto->nargs > nargs)
     rho_panic(ctx, "expect more arguments");
   pc = cls->proto->buf;
-  refs = cls->refs;
   while (1) {
     switch (*pc++) {
+    case OP_print:
+      println(top-1);
+      break;
     case OP_closure:
-      top[-1] = closure(ctx, getproto(top - 1), refs, base);
+      top[-1] = closure(ctx, getproto(top - 1), cls->refs, base);
       break;
     case OP_call:
       ctx->top = top;
@@ -343,8 +388,33 @@ int call(struct context *ctx, int nargs) {
       break;
     case OP_ret:
       return top - base;
+    case OP_pushv:
+      *top++ = base[*pc++];
+      break;
+    case OP_pushc:
+      *top++ = cls->proto->cons[*pc++];
+      break;
+    case OP_pushr:
+      *top++ = *cls->refs[*pc++]->pv;
+      break;
+    case OP_popv:
+      base[*pc++] = *--top;
+      break;
+    case OP_popr:
+      cls->refs[*pc++]->pv = --top;
+      break;
     }
   }
+}
+
+static void scan(struct parser *ps) {
+}
+
+static int next(struct parser *ps) {
+  if (ps->ahead != TK_UNKNOWN)
+    return ps->ahead;
+  scan(ps);
+  return ps->token;
 }
 
 int parse(struct parser *ps) { return 0; }
@@ -358,8 +428,14 @@ int eval(struct context *ctx, const char *s, usize n) {
   ps.ctx = ctx;
   if ((err = parse(&ps)) < 0)
     return err;
-  *ctx->top++ = closure(ctx, proto, NULL, ctx->base);
-  return call(ctx, 1);
+  rho_push(ctx, closure(ctx, proto, NULL, ctx->base));
+  return call(ctx, 0);
+}
+
+
+int main(int argc, char **argv) {
+  printf("Hello, Rho :)\n");
+  return 0;
 }
 
 #ifdef TEST_ALLOC
@@ -371,7 +447,7 @@ int main() {
   struct runtime *rt;
   struct context *c1, *c2;
 
-  rt = rho_default();
+  rt = rho_new(rho_allocator);
   assert(rt);
   c1 = rho_open(rt, 32);
   assert(c1);
@@ -386,6 +462,48 @@ int main() {
 
   rho_close(c2);
   rho_close(c1);
+  rho_drop(rt);
+  return 0;
+}
+#endif
+
+#ifdef TEST_BASIC
+#include <assert.h>
+
+int main() {
+  // x = 100
+  // print x
+  u8 buf[] = { 
+    (u8)OP_pushc, 0x0, // pushc 0 (100)
+    (u8)OP_popv,  0x0, // popv  0 (x)
+    (u8)OP_pushv, 0x0, // pushv 0 (x)
+    (u8)OP_print,      // print
+    (u8)OP_ret,        // ret
+  };
+  
+  struct proto p = {
+    .nrefs = 0,
+    .nargs = 0,
+    .nlocs = 0,
+    .ncons = 1,
+    .np = 0,
+    .nbuf = 3,
+    .buf = buf,
+    .cons = ((struct value[]){intvalue(100)}),
+  };
+
+  int n;
+  struct runtime *rt;
+  struct context *ctx;
+
+  rt = rho_new(rho_allocator);
+  ctx = rho_open(rt, 1024);
+
+  rho_push(ctx, closure(ctx, &p, NULL, ctx->base));
+  n = call(ctx, 0);
+  assert(n = 1);
+
+  rho_close(ctx);
   rho_drop(rt);
   return 0;
 }
