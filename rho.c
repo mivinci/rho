@@ -7,24 +7,24 @@ fn a(x) {
   }
 }
 
-main: load_const   0 (proto)
+main: pushc    0 (proto)
       closure
-      store_var    0 (a)
+      popv     0 (a)
       ret
-a:    load_var     0 (x)
-      load_const   1 (proto)
+a:    pushv    0 (x)
+      pushc    1 (proto)
       closure
-      store_var    1 (b)
+      popv     1 (b)
       ret
-b:    load_var     0 (y)
-      load_const   1 (proto)
+b:    pushv    0 (y)
+      pushc    1 (proto)
       closure
-      store_var    1 (c)
+      popv     1 (c)
       ret
-c:    load_var     0 (z)
-      load_ref     0 (x)
-      load_ref     1 (y)
-      load_var     0 (z)
+c:    pushv    0 (z)
+      pushr    0 (x)
+      pushr    1 (y)
+      pushv    0 (z)
       add
       add
       ret
@@ -32,8 +32,8 @@ c:    load_var     0 (z)
 
 1+2
 
-main: load_const   0 (1)
-      load_const   1 (2)
+main: pushc    0 (1)
+      pushc    1 (2)
       add
 */
 
@@ -76,15 +76,14 @@ main: load_const   0 (1)
 #define intvalue(v) ((struct value){.tag = RHO_INT, .u.i = v})
 #define fltvalue(v) ((struct value){.tag = RHO_FLT, .u.r = v})
 
-
 #define getany(p, t) ((t)(p)->u.ptr)
 #define getclosure(p) getany(p, struct closure *)
 #define getproto(p) getany(p, struct proto *)
 #define getcproto(p) getany(p, cproto)
-#define getint(p) ((i32)(p)->u.i)
-#define getflt(p) ((f32)(p)->u.r)
+#define getint(p) ((p)->u.i)
+#define getflt(p) ((p)->u.r)
 
-#define tag(v) (v->tag)
+#define tag(v) ((v)->tag)
 
 #define header(p) ((struct header *)((char *)(p) - sizeof(struct header)))
 #define cap(p) (header(p)->cap)
@@ -93,6 +92,12 @@ main: load_const   0 (1)
 
 #define bits32(x) (32 - __builtin_clz(x))
 
+#define vmbinop(op, t)                                                         \
+  struct value *s = --t - 1;                                                   \
+  if (tag(s) == RHO_INT)                                                       \
+    getint(s) op## = getint(t);                                                \
+  else                                                                         \
+    getflt(s) op## = getflt(t);
 
 enum token {
   TK_UNKNOWN,
@@ -102,7 +107,7 @@ enum token {
 
 enum opcode {
   OP_print,   // for debuging, will be removed.
-  OP_closure, // pops TOS and use it to create a closure instance onto the stack.
+  OP_closure, // pops TOS out to create a closure instance onto the stack.
   OP_call,    // call TOS.
   OP_ret,     // returns to the previous stack frame.
   OP_pushv,   // pushes a variable from var[i] onto the stack.
@@ -110,6 +115,8 @@ enum opcode {
   OP_pushr,   // pushes a reference from ref[i] onto the stack.
   OP_popv,    // pops TOS out to var[i].
   OP_popr,    // pops TOS out to ref[i].
+  OP_add,     // pops TOS and adds it to TOS-1.
+  OP_sub,     // pops TOS and substracts it from TOS-1.
 };
 
 enum tag {
@@ -133,7 +140,7 @@ struct header {
   struct header *next;
   u8 marked : 1;
   u8 color : 2;
-  usize rc;  // reference count.
+  usize rc;   // reference count.
   usize size; // size allocated for ptr.
   void *ptr;
 };
@@ -352,7 +359,7 @@ static void println(struct value *v) {
     printf("%f\n", getflt(v));
     break;
   default:
-    printf("<object 0x%p>\n", getany(v, void*));
+    printf("<object 0x%p>\n", getany(v, void *));
   }
 }
 
@@ -377,7 +384,7 @@ int call(struct context *ctx, int nargs) {
   while (1) {
     switch (*pc++) {
     case OP_print:
-      println(top-1);
+      println(top - 1);
       break;
     case OP_closure:
       top[-1] = closure(ctx, getproto(top - 1), cls->refs, base);
@@ -387,6 +394,8 @@ int call(struct context *ctx, int nargs) {
       top = base + call(ctx, *pc++);
       break;
     case OP_ret:
+      if (ctx->openrefs)
+        closerefs(ctx, base);
       return top - base;
     case OP_pushv:
       *top++ = base[*pc++];
@@ -398,21 +407,28 @@ int call(struct context *ctx, int nargs) {
       *top++ = *cls->refs[*pc++]->pv;
       break;
     case OP_popv:
-      base[*pc++] = *--top;
+      base[*pc++] = top[-1];
       break;
     case OP_popr:
       cls->refs[*pc++]->pv = --top;
       break;
+    case OP_add: {
+      vmbinop(+, top);
+    } break;
+    case OP_sub: {
+      vmbinop(-, top);
+    } break;
     }
   }
 }
 
-static void scan(struct parser *ps) {
-}
+static void scan(struct parser *ps) {}
 
 static int next(struct parser *ps) {
-  if (ps->ahead != TK_UNKNOWN)
+  if (ps->ahead != TK_UNKNOWN) {
+    ps->ahead = TK_UNKNOWN;
     return ps->ahead;
+  }
   scan(ps);
   return ps->token;
 }
@@ -420,23 +436,21 @@ static int next(struct parser *ps) {
 int parse(struct parser *ps) { return 0; }
 
 int eval(struct context *ctx, const char *s, usize n) {
-  struct parser ps;
-  struct proto *proto;
   int err;
-  proto = rho_alloc(ctx, struct proto);
-  ps.proto = proto;
+  struct parser ps;
+  struct proto proto;
+  ps.proto = &proto;
   ps.ctx = ctx;
   if ((err = parse(&ps)) < 0)
     return err;
-  rho_push(ctx, closure(ctx, proto, NULL, ctx->base));
+  rho_push(ctx, closure(ctx, &proto, NULL, ctx->base));
   return call(ctx, 0);
 }
 
-
-int main(int argc, char **argv) {
-  printf("Hello, Rho :)\n");
-  return 0;
-}
+// int main(int argc, char **argv) {
+//   printf("Hello, Rho :)\n");
+//   return 0;
+// }
 
 #ifdef TEST_ALLOC
 #include <assert.h>
@@ -472,24 +486,33 @@ int main() {
 
 int main() {
   // x = 100
-  // print x
-  u8 buf[] = { 
-    (u8)OP_pushc, 0x0, // pushc 0 (100)
-    (u8)OP_popv,  0x0, // popv  0 (x)
-    (u8)OP_pushv, 0x0, // pushv 0 (x)
-    (u8)OP_print,      // print
-    (u8)OP_ret,        // ret
+  // y = 200
+  // print x + y
+
+  // main:
+  // .int  40
+  // .int  2
+  u8 buf[] = {
+      (u8)OP_pushc, 0x0, // pushc 0 (40)
+      (u8)OP_popv,  0x0, // popv  0 (x)
+      (u8)OP_pushc, 0x1, // pushc 1 (2)
+      (u8)OP_popv,  0x1, // popv  1 (y)
+      (u8)OP_pushv, 0x0, // pushv 0 (x)
+      (u8)OP_pushv, 0x1, // pushv 1 (y)
+      (u8)OP_add,        // add
+      (u8)OP_print,      // print
+      (u8)OP_ret,        // ret
   };
-  
+
   struct proto p = {
-    .nrefs = 0,
-    .nargs = 0,
-    .nlocs = 0,
-    .ncons = 1,
-    .np = 0,
-    .nbuf = 3,
-    .buf = buf,
-    .cons = ((struct value[]){intvalue(100)}),
+      .nrefs = 0,
+      .nargs = 0,
+      .nlocs = 0,
+      .ncons = 2,
+      .np = 0,
+      .nbuf = 9,
+      .buf = buf,
+      .cons = ((struct value[]){intvalue(40), intvalue(2)}),
   };
 
   int n;
