@@ -11,11 +11,11 @@ print z
 
 @rho_assembly
 
-main:
 
+.fun main
 .int 100
 .flt 3.14
-.str hello
+.str "hello"
 
 pushc  0 (100)
 popv   0 (x)

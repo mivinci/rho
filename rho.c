@@ -69,10 +69,14 @@ main: pushc    0 (1)
 #define rho_push(c, v) (*c->top++ = v)
 #define rho_pop(c) (*(--c->top))
 
+#define tag(p) ((p)->tag)
+#define isnum(p) (tag(p) == RHO_INT || tag(p) == RHO_FLT)
+
 #define anyvalue(p, t) ((struct value){.tag = t, .u.ptr = p})
 #define closurevalue(p) anyvalue(p, RHO_CLOSURE)
 #define protovalue(p) anyvalue(p, RHO_PROTO)
 #define cprotovalue(p) anyvalue(p, RHO_CPROTO)
+#define strlitvalue(p) anyvalue(p, RHO_STRLIT)
 #define intvalue(v) ((struct value){.tag = RHO_INT, .u.i = v})
 #define fltvalue(v) ((struct value){.tag = RHO_FLT, .u.r = v})
 
@@ -80,10 +84,10 @@ main: pushc    0 (1)
 #define getclosure(p) getany(p, struct closure *)
 #define getproto(p) getany(p, struct proto *)
 #define getcproto(p) getany(p, cproto)
+#define getstrlit(p) getany(p, const char*)
 #define getint(p) ((p)->u.i)
 #define getflt(p) ((p)->u.r)
-
-#define tag(v) ((v)->tag)
+#define getnum(p) (tag(p) == RHO_INT ? getint(p) : getflt(p))
 
 #define header(p) ((struct header *)((char *)(p) - sizeof(struct header)))
 #define cap(p) (header(p)->cap)
@@ -92,12 +96,18 @@ main: pushc    0 (1)
 
 #define bits32(x) (32 - __builtin_clz(x))
 
-#define vmbinop(op, t)                                                         \
-  struct value *s = --t - 1;                                                   \
+
+#define vmbinop(op, top) {                                                     \
+  struct value *s = --top - 1;                                                 \
   if (tag(s) == RHO_INT)                                                       \
-    getint(s) op## = getint(t);                                                \
+    getint(s) op## = getint(top);                                              \
   else                                                                         \
-    getflt(s) op## = getflt(t);
+    getflt(s) op## = getflt(top);}
+
+
+#define vmjmpop(op, pc, top) \
+  if (getnum(--top) op 0)    \
+    pc += (*(u16*)pc);
 
 enum token {
   TK_UNKNOWN,
@@ -117,11 +127,16 @@ enum opcode {
   OP_popr,    // pops TOS out to ref[i].
   OP_add,     // pops TOS and adds it to TOS-1.
   OP_sub,     // pops TOS and substracts it from TOS-1.
+  OP_cmp,     // pops TOS and TOS-1 and then pushes TOS-(TOS-1) onto the stack. 
+  OP_jpn,     // moves pc i step forward if TOS < 0
+  OP_jpp,     // moves pc i step forward if TOS > 0
+  OP_jpz,     // moves pc i step forward if TOS == 0
 };
 
 enum tag {
   RHO_INT,
   RHO_FLT,
+  RHO_STRLIT,
   RHO_PROTO,
   RHO_CPROTO,
   RHO_CLOSURE,
@@ -358,6 +373,9 @@ static void println(struct value *v) {
   case RHO_FLT:
     printf("%f\n", getflt(v));
     break;
+  case RHO_STRLIT:
+    printf("%s\n", getstrlit(v));
+    break;
   default:
     printf("<object 0x%p>\n", getany(v, void *));
   }
@@ -412,12 +430,28 @@ int call(struct context *ctx, int nargs) {
     case OP_popr:
       cls->refs[*pc++]->pv = --top;
       break;
-    case OP_add: {
+    case OP_add:
       vmbinop(+, top);
-    } break;
-    case OP_sub: {
+      break;
+    case OP_sub:
       vmbinop(-, top);
-    } break;
+      break;
+    case OP_cmp:
+      if (isnum(top-1) && isnum(top-2)) {
+        vmbinop(-, top);
+        break;
+      }
+      // TODO: compare string literal
+      break;
+    case OP_jpn:
+      vmjmpop(<, pc, top);
+      break;
+    case OP_jpp:
+      vmjmpop(>, pc, top);
+      break;
+    case OP_jpz:
+      vmjmpop(==, pc, top);
+      break;
     }
   }
 }
@@ -488,10 +522,12 @@ int main() {
   // x = 100
   // y = 200
   // print x + y
+  // print "Hello, Rho :)"
 
-  // main:
+  // .fun  main
   // .int  40
   // .int  2
+  // .str  "Hello, Rho :)"
   u8 buf[] = {
       (u8)OP_pushc, 0x0, // pushc 0 (40)
       (u8)OP_popv,  0x0, // popv  0 (x)
@@ -500,6 +536,8 @@ int main() {
       (u8)OP_pushv, 0x0, // pushv 0 (x)
       (u8)OP_pushv, 0x1, // pushv 1 (y)
       (u8)OP_add,        // add
+      (u8)OP_print,      // print
+      (u8)OP_pushc, 0x2, // pushc 2 ("Hello, Rho :)")
       (u8)OP_print,      // print
       (u8)OP_ret,        // ret
   };
@@ -510,9 +548,13 @@ int main() {
       .nlocs = 0,
       .ncons = 2,
       .np = 0,
-      .nbuf = 9,
+      .nbuf = 11,
       .buf = buf,
-      .cons = ((struct value[]){intvalue(40), intvalue(2)}),
+      .cons = ((struct value[]){
+        intvalue(40), 
+        intvalue(2), 
+        strlitvalue("Hello, Rho :)"),
+      }),
   };
 
   int n;
