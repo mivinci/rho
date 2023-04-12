@@ -84,30 +84,33 @@ main: pushc    0 (1)
 #define getclosure(p) getany(p, struct closure *)
 #define getproto(p) getany(p, struct proto *)
 #define getcproto(p) getany(p, cproto)
-#define getstrlit(p) getany(p, const char*)
+#define getstrlit(p) getany(p, const char *)
 #define getint(p) ((p)->u.i)
 #define getflt(p) ((p)->u.r)
 #define getnum(p) (tag(p) == RHO_INT ? getint(p) : getflt(p))
 
 #define header(p) ((struct header *)((char *)(p) - sizeof(struct header)))
-#define cap(p) (header(p)->cap)
-#define len(p) (header(p)->len)
-#define cap_expect(p) (1 << bits32(sizeof(*(p))))
+#define avail(p) (header(p)->avail)
+#define size(p) (header(p)->size)
+#define size_expect(p) (1 << bits32(sizeof(*(p))))
+#define len(p) ((size(p) - avail(p)) / sizeof(*p))
+#define cap(p) (size(p) / sizeof(*p))
 
 #define bits32(x) (32 - __builtin_clz(x))
+#define max(a, b) ((a) > (b) ? (a) : (b))
 
+#define vmbinop(op, top)                                                       \
+  {                                                                            \
+    struct value *s = --top - 1;                                               \
+    if (tag(s) == RHO_INT)                                                     \
+      getint(s) op## = getint(top);                                            \
+    else                                                                       \
+      getflt(s) op## = getflt(top);                                            \
+  }
 
-#define vmbinop(op, top) {                                                     \
-  struct value *s = --top - 1;                                                 \
-  if (tag(s) == RHO_INT)                                                       \
-    getint(s) op## = getint(top);                                              \
-  else                                                                         \
-    getflt(s) op## = getflt(top);}
-
-
-#define vmjmpop(op, pc, top) \
-  if (getnum(--top) op 0)    \
-    pc += (*(u16*)pc);
+#define vmjmpop(op, pc, top)                                                   \
+  if (getnum(--top) op 0)                                                      \
+    pc += (*(u16 *)pc);
 
 enum token {
   TK_UNKNOWN,
@@ -127,7 +130,7 @@ enum opcode {
   OP_popr,    // pops TOS out to ref[i].
   OP_add,     // pops TOS and adds it to TOS-1.
   OP_sub,     // pops TOS and substracts it from TOS-1.
-  OP_cmp,     // pops TOS and TOS-1 and then pushes TOS-(TOS-1) onto the stack. 
+  OP_cmp,     // pops TOS and TOS-1 and then pushes TOS-(TOS-1) onto the stack.
   OP_jpn,     // moves pc i step forward if TOS < 0
   OP_jpp,     // moves pc i step forward if TOS > 0
   OP_jpz,     // moves pc i step forward if TOS == 0
@@ -155,8 +158,9 @@ struct header {
   struct header *next;
   u8 marked : 1;
   u8 color : 2;
-  usize rc;   // reference count.
-  usize size; // size allocated for ptr.
+  usize rc;    // reference count.
+  usize size;  // size allocated for ptr.
+  usize avail; // size unused
   void *ptr;
 };
 
@@ -287,6 +291,7 @@ static void *allocgc(struct context *ctx, usize size) {
       rho_panic(ctx, "out of memory");
     memset(hdr, 0, sizeof(*hdr));
     hdr->size = size;
+    hdr->avail = hdr->size;
     hdr->ptr = (void *)(hdr + 1);
     return hdr->ptr;
   }
@@ -299,11 +304,13 @@ static void *allocgc(struct context *ctx, usize size) {
       rho_panic(ctx, "out of memory");
     memset(hdr, 0, sizeof(*hdr));
     hdr->size = size;
+    hdr->avail = hdr->size;
     hdr->ptr = (void *)(hdr + 1);
     rho_unlock(ctx);
     return hdr->ptr;
   }
   hdr->rc = 0;
+  hdr->avail = hdr->size;
   rt->allocated[bits] = hdr->next;
   rho_unlock(ctx);
   return hdr->ptr;
@@ -322,6 +329,23 @@ static void freegc(struct context *ctx, void *ptr) {
   hdr->next = rt->allocated[bits];
   rt->allocated[bits] = hdr;
   rho_unlock(ctx);
+}
+
+static void *reallocgc(struct context *ctx, void *ptr, usize newsize) {
+  struct runtime *rt = ctx->rt;
+  struct header *hdr = header(ptr), *newhdr;
+  if (newsize > (1 << RHO_PMAX)) {
+    if (!(hdr = rt->allocator.realloc(hdr, newsize + sizeof(*hdr))))
+      rho_panic(ctx, "out of memory");
+    hdr->size = newsize;
+    hdr->avail += newsize - hdr->size;
+    hdr->ptr = (void *)(hdr + 1);
+    return hdr->ptr;
+  }
+  newhdr = allocgc(ctx, newsize);
+  memcpy(newhdr->ptr, hdr->ptr, hdr->size);
+  freegc(ctx, hdr->ptr);
+  return newhdr->ptr;
 }
 
 struct ref *findref(struct context *ctx, struct value *level) {
@@ -437,7 +461,7 @@ int call(struct context *ctx, int nargs) {
       vmbinop(-, top);
       break;
     case OP_cmp:
-      if (isnum(top-1) && isnum(top-2)) {
+      if (isnum(top - 1) && isnum(top - 2)) {
         vmbinop(-, top);
         break;
       }
@@ -481,6 +505,135 @@ int eval(struct context *ctx, const char *s, usize n) {
   return call(ctx, 0);
 }
 
+static inline void bufwrite(struct context *ctx, u8 **p, u8 *buf, usize n) {
+  struct header *hdr = header(*p);
+  if (hdr->avail < n)
+    *p = reallocgc(ctx, *p, max(n, hdr->size * 3 / 2));
+  memcpy(*p, buf, n);
+  hdr->avail -= n;
+}
+
+static void emit8(struct context *ctx, u8 **p, u8 c) {
+  bufwrite(ctx, p, &c, 1);
+}
+
+static void emit16(struct context *ctx, u8 **p, u16 c) {
+  bufwrite(ctx, p, (u8 *)&c, 2);
+}
+
+struct assembler {
+  struct context *ctx;
+  struct proto *p;
+  const char *buf;
+  int lineno;
+};
+
+static void asm_syntaxerror(struct assembler *as, const char *fmt, ...) {
+  va_list ap;
+  char buf[64];
+  sprintf(buf, "syntax error at line %d: %s\n", as->lineno, fmt);
+  va_start(ap, fmt);
+  vfprintf(stderr, buf, ap);
+  va_end(ap);
+}
+
+int asm_parse(struct assembler *as) {
+  const char *s = as->buf;
+  struct proto *p = as->p;
+  int err, op, n = 0;
+  char c;
+
+  while ((c = *s++) != 0) {
+    switch (c) {
+    case ' ':
+    case '\t':
+    case '\n':
+      if (c == '\n')
+        as->lineno++;
+      break;
+    case '.':
+      if (strncmp(s, "fun", 3) == 0) {
+        s += 3;
+        while (*s++ == ' ')
+          ;
+        p->cons = rho_allocex(as->ctx, struct value, atoi(s));
+      } else if (strncmp(s, "int", 3) == 0) {
+        s += 3;
+        while (*s++ == ' ')
+          ;
+        p->cons[n++] = intvalue(atoi(s));
+      } else if (strncmp(s, "flt", 3)) {
+        s += 3;
+        while (*s++ == ' ')
+          ;
+        p->cons[n++] = fltvalue(atof(s));
+      } else {
+        asm_syntaxerror(as, "unexpected token");
+        return 1;
+      }
+      while (*s++ != '\n')
+        ;
+      break;
+    case 'p':
+      if (*s++ == 'u' && *s++ == 's' && *s++ == 'h') {
+        switch (*s++) {
+        case 'c':
+          op = OP_pushc;
+          break;
+        case 'v':
+          op = OP_pushv;
+          break;
+        case 'r':
+          op = OP_pushr;
+          break;
+        }
+      } else if (*s++ == 'o' && *s++ == 'p') {
+        switch (*s++) {
+        case 'v':
+          op = OP_popv;
+          break;
+        case 'r':
+          op = OP_popr;
+          break;
+        }
+      } else if (strncmp(s, "rint", 4) == 0) {
+        s += 4;
+        emit8(as->ctx, &p->buf, (u8)OP_print);
+        while (*s++ != '\n')
+          ;
+        continue;
+      } else {
+        asm_syntaxerror(as, "unexpected token");
+        return 1;
+      }
+      while (*s++ == ' ')
+        ;
+      emit8(as->ctx, &p->buf, (u8)op);
+      emit8(as->ctx, &p->buf, (u8)atoi(s));
+      while (*s++ != '\n')
+        ;
+      break;
+    default:
+      if (strncmp(s, "add", 3) == 0) {
+        s += 3;
+        op = OP_add;
+      } else if (strncmp(s, "ret", 3) == 0) {
+        s += 3;
+        op = OP_ret;
+      } else {
+        asm_syntaxerror(as, "unexpected token");
+        return 1;
+      }
+      emit8(as->ctx, &p->buf, (u8)op);
+      while (*s++ != '\n')
+        ;
+    }
+  }
+  p->nbuf = len(p->buf);
+  p->ncons = len(p->cons);
+  return 0;
+}
+
 // int main(int argc, char **argv) {
 //   printf("Hello, Rho :)\n");
 //   return 0;
@@ -505,7 +658,7 @@ int main() {
   struct var *v;
   v = rho_alloc(c1, struct var);
   assert(v);
-  assert(cap(v) == cap_expect(v));
+  assert(size(v) == size_expect(v));
   rho_free(c1, v);
 
   rho_close(c2);
@@ -551,9 +704,9 @@ int main() {
       .nbuf = 11,
       .buf = buf,
       .cons = ((struct value[]){
-        intvalue(40), 
-        intvalue(2), 
-        strlitvalue("Hello, Rho :)"),
+          intvalue(40),
+          intvalue(2),
+          strlitvalue("Hello, Rho :)"),
       }),
   };
 

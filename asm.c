@@ -12,7 +12,7 @@ print z
 @rho_assembly
 
 
-.fun main
+.fun main 3
 .int 100
 .flt 3.14
 .str "hello"
@@ -31,7 +31,3 @@ pushv  2 (z)
 print
 ret
 */
-
-struct parser {
-
-};
