@@ -726,3 +726,19 @@ int main() {
   return 0;
 }
 #endif
+
+int main() {
+  struct assembler as;
+  struct runtime *rt;
+  struct context *ctx;
+  rt = rho_new(rho_allocator);
+  ctx = rho_open(rt, 1024);
+  as.buf = ".fun 3";
+  as.ctx = ctx;
+  as.p = rho_alloc(ctx, struct proto);
+  as.lineno = 0;
+  asm_parse(&as);
+  rho_close(ctx);
+  rho_drop(rt);
+  return 0;
+}
