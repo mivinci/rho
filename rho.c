@@ -556,8 +556,10 @@ static void asm_syntaxerror(struct assembler *p, const char *fmt, ...) {
   while (*(s)++ != '\n')                                                         \
     ;
 
-static int asm_parse(struct assembler *p) {
-  const char *s = p->buf;
+static int asm_parse(struct assembler *a) {
+  struct value v;
+  struct proto *p = a->p;
+  const char *s = a->buf;
   int op;
   while (*s != 0) {
     switch (*s++) {
@@ -565,10 +567,22 @@ static int asm_parse(struct assembler *p) {
     case '\t':
     case ' ':
       if (*s == '\n')
-        p->lineno++;
+        a->lineno++;
       break;
-    case ';':
-      s++;
+    case '.':
+      if (strncmp(s, ".int", 4) == 0) {
+        s += 4;
+        skipspaces(s);
+        v = rho_int(atoi(s));
+      } else if (strncmp(s, ".flt", 4) == 0) {
+        s += 4;
+        skipspaces(s);
+        v = rho_float(atof(s));
+      } else {
+        asm_syntaxerror(a, "unexpected token: p%c%c%c", s[-3], s[-2], s[-1]);
+        return 1;
+      }
+      p->consts = rho_append(a->ctx, p->consts, &v, 1, struct value);
       skipcomment(s);
       break;
     case 'p':
@@ -584,9 +598,6 @@ static int asm_parse(struct assembler *p) {
           op = OP_pshr;
           break;
         }
-        emit8(p->ctx, &p->p->buf, (u8)op);
-        skipspaces(s);
-        emit8(p->ctx, &p->p->buf, (u8)atoi(s));
       } else if (*s++ == 'o' && *s++ == 'p') {
         switch (*s) {
         case 'v':
@@ -597,12 +608,14 @@ static int asm_parse(struct assembler *p) {
           break;
         }
       } else {
-        asm_syntaxerror(p, "unexpected token: p%c%c%c", s[-3], s[-2], s[-1]);
+        asm_syntaxerror(a, "unexpected token: p%c%c%c", s[-3], s[-2], s[-1]);
         return 1;
       }
-      emit8(p->ctx, &p->p->buf, (u8)op);
+      emit8(a->ctx, &p->buf, (u8)op);
       skipspaces(s);
-      emit8(p->ctx, &p->p->buf, (u8)atoi(s));
+      emit8(a->ctx, &p->buf, (u8)atoi(s));
+      skipcomment(s);
+      break;
     }
   }
   return 0;
