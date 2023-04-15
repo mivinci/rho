@@ -7,24 +7,24 @@ fn a(x) {
   }
 }
 
-main: pushc    0 (proto)
+main: pshc     0 (proto)
       closure
       popv     0 (a)
       ret
-a:    pushv    0 (x)
-      pushc    1 (proto)
+a:    pshv     0 (x)
+      pshc     1 (proto)
       closure
       popv     1 (b)
       ret
-b:    pushv    0 (y)
-      pushc    1 (proto)
+b:    pshv     0 (y)
+      pshc     1 (proto)
       closure
       popv     1 (c)
       ret
-c:    pushv    0 (z)
-      pushr    0 (x)
-      pushr    1 (y)
-      pushv    0 (z)
+c:    pshv     0 (z)
+      pshr     0 (x)
+      pshr     1 (y)
+      pshv     0 (z)
       add
       add
       ret
@@ -32,8 +32,8 @@ c:    pushv    0 (z)
 
 1+2
 
-main: pushc    0 (1)
-      pushc    1 (2)
+main: pshc    0 (1)
+      pshc    1 (2)
       add
 */
 
@@ -76,7 +76,7 @@ main: pushc    0 (1)
 #define rho_closure(p) rho_any(p, RHO_CLOSURE)
 #define rho_proto(p) rho_any(p, RHO_PROTO)
 #define rho_cproto(p) rho_any(p, RHO_CPROTO)
-#define rho_str(p) rho_any(p, RHO_STRLIT)
+#define rho_str(p) rho_any(p, RHO_STR)
 #define rho_uint(v) ((struct value){.tag = RHO_UINT, .u.u = v})
 #define rho_int(v) ((struct value){.tag = RHO_INT, .u.i = v})
 #define rho_float(v) ((struct value){.tag = RHO_FLT, .u.r = v})
@@ -125,6 +125,7 @@ enum token {
 };
 
 enum opcode {
+  OP_rsvd,  // reserved.
   OP_print, // for debuging, will be removed.
   OP_cls,   // pops TOS out to create a closure instance onto the stack.
   OP_call,  // call TOS.
@@ -545,15 +546,15 @@ static void asm_syntaxerror(struct assembler *p, const char *fmt, ...) {
   fprintf(stderr, "syntax error at line %ld: ", p->lineno);
   vfprintf(stderr, fmt, ap);
   va_end(ap);
-  putc('\0', stderr);
+  putc('\n', stderr);
 }
 
 #define skipspaces(s)                                                          \
-  while (*(s)++ == ' ')                                                          \
+  while (*++s == ' ')                                                          \
     ;
 
-#define skipcomment(s)                                                               \
-  while (*(s)++ != '\n')                                                         \
+#define skipcomment(s)                                                         \
+  while (*++s != '\n')                                                         \
     ;
 
 static int asm_parse(struct assembler *a) {
@@ -570,24 +571,29 @@ static int asm_parse(struct assembler *a) {
         a->lineno++;
       break;
     case '.':
-      if (strncmp(s, ".int", 4) == 0) {
-        s += 4;
+      if (strncmp(s, "int", 3) == 0) {
+        s += 3;
         skipspaces(s);
         v = rho_int(atoi(s));
-      } else if (strncmp(s, ".flt", 4) == 0) {
-        s += 4;
+      } else if (strncmp(s, "flt", 3) == 0) {
+        s += 3;
         skipspaces(s);
         v = rho_float(atof(s));
       } else {
         asm_syntaxerror(a, "unexpected token: p%c%c%c", s[-3], s[-2], s[-1]);
-        return 1;
+        return -1;
       }
       p->consts = rho_append(a->ctx, p->consts, &v, 1, struct value);
       skipcomment(s);
       break;
     case 'p':
+      if (strncmp(s, "rint", 4) == 0) {
+        s += 4;
+        emit8(a->ctx, &p->buf, (u8)OP_print);
+        continue;
+      }
       if (*s++ == 's' && *s++ == 'h') {
-        switch (*s) {
+        switch (*s++) {
         case 'c':
           op = OP_pshc;
           break;
@@ -599,7 +605,7 @@ static int asm_parse(struct assembler *a) {
           break;
         }
       } else if (*s++ == 'o' && *s++ == 'p') {
-        switch (*s) {
+        switch (*s++) {
         case 'v':
           op = OP_popv;
           break;
@@ -609,7 +615,7 @@ static int asm_parse(struct assembler *a) {
         }
       } else {
         asm_syntaxerror(a, "unexpected token: p%c%c%c", s[-3], s[-2], s[-1]);
-        return 1;
+        return -1;
       }
       emit8(a->ctx, &p->buf, (u8)op);
       skipspaces(s);
@@ -621,8 +627,32 @@ static int asm_parse(struct assembler *a) {
   return 0;
 }
 
-// prog := { stmt }
-// stmt := [ IDENT: ] IDENT [ IDENT ] [ ;* ] \n
+int repl(struct context *ctx) {
+  struct closure *cls;
+  struct assembler a = {
+    .ctx = ctx,
+    .lineno = 0,
+    .p = rho_alloc(ctx, struct proto),
+  };
+  int err;
+  char buf[32];
+  while (1) {
+    printf("rho$ ");
+    fgets(buf, 32, stdin);
+    if (*buf == '\n')
+      break;
+    a.buf = buf;
+    if ((err = asm_parse(&a)) < 0)
+      return err;
+  }
+  cls = closure(ctx, a.p, NULL, ctx->base);
+  rho_push(ctx, rho_closure(cls));
+  if ((err = call(ctx, 0)) < 0)
+    return err;
+  rho_free(ctx, cls);
+  rho_free(ctx, a.p);
+  return 0;
+}
 
 // int main(int argc, char **argv) {
 //   printf("Hello, Rho :)\n");
@@ -672,15 +702,15 @@ int main() {
   // .int  2
   // .str  "Hello, Rho :)"
   u8 buf[] = {
-      (u8)OP_pushc, 0x0, // pushc 0 (40)
+      (u8)OP_pushc, 0x0, // pshc 0 (40)
       (u8)OP_popv,  0x0, // popv  0 (x)
-      (u8)OP_pushc, 0x1, // pushc 1 (2)
+      (u8)OP_pushc, 0x1, // pshc 1 (2)
       (u8)OP_popv,  0x1, // popv  1 (y)
-      (u8)OP_pushv, 0x0, // pushv 0 (x)
-      (u8)OP_pushv, 0x1, // pushv 1 (y)
+      (u8)OP_pushv, 0x0, // pshv 0 (x)
+      (u8)OP_pushv, 0x1, // pshv 1 (y)
       (u8)OP_add,        // add
       (u8)OP_print,      // print
-      (u8)OP_pushc, 0x2, // pushc 2 ("Hello, Rho :)")
+      (u8)OP_pushc, 0x2, // pshc 2 ("Hello, Rho :)")
       (u8)OP_print,      // print
       (u8)OP_ret,        // ret
   };
@@ -704,7 +734,7 @@ int main() {
   rt = rho_new(rho_allocator);
   ctx = rho_open(rt, 1024);
 
-  rho_push(ctx, closure(ctx, &p, NULL, ctx->base));
+  rho_push(ctx, rho_closure(closure(ctx, &p, NULL, ctx->base)));
   n = call(ctx, 0);
   assert(n = 1);
   rho_close(ctx);
@@ -712,6 +742,8 @@ int main() {
   return 0;
 }
 #endif
+
+#ifdef TEST_APPEND
 
 #include <assert.h>
 
@@ -721,26 +753,69 @@ int main() {
   rt = rho_new(rho_allocator);
   ctx = rho_open(rt, 1024);
 
-  struct value *p, *q;
-  struct value a = rho_int(100);
-  struct value b = rho_float(3.14);
-
-  p = rho_append(ctx, p, &a, 1, struct value);
-  printf("len(p) = %ld\n", len(p));
-  printf("cap(p) = %ld\n", cap(p));
-  printv("p[0]   = ", p);
-
-  q = rho_append(ctx, q, &b, 1, struct value);
-  printf("len(q) = %ld\n", len(q));
-  printf("cap(q) = %ld\n", cap(q));
-  printv("q[0]   = ", q);
-
-  p = rho_append(ctx, p, q, 1, struct value);
-  printf("len(p) = %ld\n", len(p));
-  printf("cap(p) = %ld\n", cap(p));
-  printv("p[0]   = ", p);
+  struct value *p = NULL;
+  struct value v[] = {
+    rho_int(100),
+    rho_float(3.14),
+    rho_str("Rho"),
+  };
+  int i;
+  // TODO: segmentation fault at i = 2 :(
+  for (i = 0; i < 3; i++) {
+    p = rho_append(ctx, p, v+i, 1, struct value);
+    printf("len(p) = %ld\n", len(p));
+    printf("cap(p) = %ld\n", cap(p));
+    printv("p[0]   = ", p);
+  }
 
   rho_close(ctx);
   rho_drop(rt);
   return 0;
 }
+
+#endif
+
+#ifdef TEST_ASM
+
+#include <assert.h>
+
+int main() {
+  struct runtime *rt;
+  struct context *ctx;
+  rt = rho_new(rho_allocator);
+  ctx = rho_open(rt, 1024);
+
+  struct assembler a = {
+    .ctx = ctx,
+    .p = rho_alloc(ctx, struct proto),
+    .lineno = 0,
+    .buf = "pshc 1",
+  };
+
+  int err = asm_parse(&a);
+  assert(!err);
+
+  rho_close(ctx);
+  rho_drop(rt);
+  return 0;
+}
+
+#endif
+
+#ifdef TEST_REPL
+
+int main() {
+  struct runtime *rt;
+  struct context *ctx;
+
+  rt = rho_new(rho_allocator);
+  ctx = rho_open(rt, 1024);
+
+  printf("exit with status %d\n", repl(ctx));
+
+  rho_close(ctx);
+  rho_drop(rt);
+  return 0;
+}
+
+#endif
