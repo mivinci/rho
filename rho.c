@@ -344,7 +344,7 @@ static void *reallocgc(struct context *ctx, void *ptr, usize newsize) {
     hdr->ptr = (void *)(hdr + 1);
     return hdr->ptr;
   }
-  newhdr = allocgc(ctx, newsize);
+  newhdr = header(allocgc(ctx, newsize));
   memcpy(newhdr->ptr, hdr->ptr, hdr->size);
   freegc(ctx, hdr->ptr);
   return newhdr->ptr;
@@ -681,6 +681,12 @@ int main() {
   assert(size(v) == size_expect(v));
   rho_free(c1, v);
 
+  u32 *a;
+  a = allocgc(c1, sizeof(*a));
+  assert(a);
+  a = reallocgc(c1, a, sizeof(*a)*2);
+  assert(a);
+
   rho_close(c2);
   rho_close(c1);
   rho_drop(rt);
@@ -702,17 +708,17 @@ int main() {
   // .int  2
   // .str  "Hello, Rho :)"
   u8 buf[] = {
-      (u8)OP_pushc, 0x0, // pshc 0 (40)
-      (u8)OP_popv,  0x0, // popv  0 (x)
-      (u8)OP_pushc, 0x1, // pshc 1 (2)
-      (u8)OP_popv,  0x1, // popv  1 (y)
-      (u8)OP_pushv, 0x0, // pshv 0 (x)
-      (u8)OP_pushv, 0x1, // pshv 1 (y)
-      (u8)OP_add,        // add
-      (u8)OP_print,      // print
-      (u8)OP_pushc, 0x2, // pshc 2 ("Hello, Rho :)")
-      (u8)OP_print,      // print
-      (u8)OP_ret,        // ret
+      (u8)OP_pshc, 0x0, // pshc 0 (40)
+      (u8)OP_popv, 0x0, // popv 0 (x)
+      (u8)OP_pshc, 0x1, // pshc 1 (2)
+      (u8)OP_popv, 0x1, // popv 1 (y)
+      (u8)OP_pshv, 0x0, // pshv 0 (x)
+      (u8)OP_pshv, 0x1, // pshv 1 (y)
+      (u8)OP_add,       // add
+      (u8)OP_print,     // print
+      (u8)OP_pshc, 0x2, // pshc 2 ("Hello, Rho :)")
+      (u8)OP_print,     // print
+      (u8)OP_ret,       // ret
   };
 
   struct proto p = {
