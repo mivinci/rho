@@ -4,7 +4,7 @@
 *.o
 *.a
 *.out
-test.*
 *.tab.h
 *.tab.c
 *.yy.c
+__*

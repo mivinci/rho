@@ -1,3 +1,7 @@
+// rho compiler
+
+#include "rho.h"
+
 /*
 @rho
 
