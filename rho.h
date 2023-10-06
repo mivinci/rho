@@ -47,8 +47,8 @@ typedef int i32;
 typedef float f32;
 typedef size_t usize;
 
-struct context;
-struct runtime;
+typedef struct context rho_context;
+typedef struct runtime rho_runtime;
 
 typedef int (*cproto)(struct context *, int);
 
@@ -70,11 +70,15 @@ struct allocator {
 // allocates a new rho runtime.
 struct runtime *rho_new(struct allocator);
 // opens a rho context from a rho runtime with a stack size.
-struct context *rho_open(struct runtime *, int);
-// closes a rho context.
+struct context *rho_openfrom(struct runtime *, int);
+// opens a rho context from the default rho runtime with a stack size.
+struct context *rho_open(int);
+// closes a rho context and frees the unerlying runtime if the last is closed.
 void rho_close(struct context *);
 
+// traces backwards on stack frames and writes them to stderr and calls exit(1).
 void rho_panic(struct context *, const char *, ...);
+// raises an error to a rho context.
 void rho_error(struct context *, const char *, ...);
 
 int rho_call(struct context *, int);

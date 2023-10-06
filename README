@@ -15,4 +15,11 @@ A Rho runtime has more than one contexts and each context has its own stack for 
 
 Rho is for learning purposes only and is under really slow development.
 
+TODO:
+  - error handling
+  - garbage collector
+  - compiler
+  - standard library
+
+
 MIT licensed.

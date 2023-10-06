@@ -121,6 +121,8 @@ struct header {
   void *ptr;
 };
 
+static struct runtime *__R;
+
 struct runtime *rho_new(struct allocator a) {
   struct runtime *rt;
   if (!(rt = a.alloc(sizeof(*rt))))
@@ -131,7 +133,13 @@ struct runtime *rho_new(struct allocator a) {
   return rt;
 }
 
-struct context *rho_open(struct runtime *rt, int size) {
+struct context *rho_open(int size) {
+  if (!__R)  // TODO: lock
+    __R = rho_new(rho_allocator);
+  return rho_openfrom(__R, size);
+}
+
+struct context *rho_openfrom(struct runtime *rt, int size) {
   struct context *ctx;
   void *ptr;
   if (!(ptr = rt->allocator.alloc(size + sizeof(*ctx))))
@@ -270,6 +278,7 @@ static struct closure *alloc_closure(struct context *ctx, struct proto *proto,
   cls = rho_allocex(ctx, struct closure, nref);
   rho_assert(cls);
   cls->proto = proto;
+  cls->refs = (struct ref **)(cls + 1);
   for (i = 0; i < nref; i++) {
     ref = proto->refs + i;
     if (ref->islocal)
@@ -369,7 +378,7 @@ int rho_call(struct context *ctx, int narg) {
     rho_panic(ctx, "not callable");
   cls = toclosure(p);
   if (cls->proto->narg > narg)
-    rho_panic(ctx, "mising %d argument(s)", cls->proto->narg - narg);
+    rho_panic(ctx, "missing %d argument(s)", cls->proto->narg - narg);
   pc = cls->proto->buf;
   while (1) {
     switch (*pc++) {
