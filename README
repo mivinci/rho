@@ -11,7 +11,7 @@ Rho (aka ρ) is an embedding programming language with lexical scoping and some 
 | +---------+ +---------+ +---------+ |
 +-------------------------------------+
 
-A Rho runtime has more than one contexts and each context has its own stack for function calls and local variables. The runtime also maintains a global memory pool for objects less than 1kB and does garbage collection. Contexts are also scheduled by the runtime to execute bytecodes concurrently.
+A Rho runtime has more than one context and each context has its own stack for function calls and local variables. The runtime also maintains a global memory pool for objects less than 1kB and does garbage collection. Contexts are also scheduled by the runtime to execute bytecodes concurrently.
 
 Rho is for learning purposes only and is under really slow development.
 

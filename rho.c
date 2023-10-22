@@ -121,8 +121,6 @@ struct header {
   void *ptr;
 };
 
-static struct runtime *__R;
-
 struct runtime *rho_new(struct allocator a) {
   struct runtime *rt;
   if (!(rt = a.alloc(sizeof(*rt))))
@@ -134,6 +132,7 @@ struct runtime *rho_new(struct allocator a) {
 }
 
 struct context *rho_open(int size) {
+  static struct runtime *__R;
   if (!__R)  // TODO: lock
     __R = rho_new(rho_allocator);
   return rho_openfrom(__R, size);

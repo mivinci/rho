@@ -4,7 +4,7 @@
 
 int hello(rho_context *ctx, int narg) {
   printf("hello rho :) narg = %d\n", narg);
-  rho_panic(ctx, "everything is fine");
+  rho_panic(ctx, "everything is good");
   printf("unreachable\n");
   return 0;
 }

@@ -76,11 +76,12 @@ struct context *rho_open(int);
 // closes a rho context and frees the unerlying runtime if the last is closed.
 void rho_close(struct context *);
 
-// traces backwards on stack frames and writes them to stderr and calls exit(1).
+// traces back through stack frames, writes them to stderr and calls exit(1).
 void rho_panic(struct context *, const char *, ...);
 // raises an error to a rho context.
 void rho_error(struct context *, const char *, ...);
-
+// given the number of arguments, calls the value on top of the stack, returns
+// the number of values returned by the callee.
 int rho_call(struct context *, int);
 
 void __rho_push(struct context *, struct value);
