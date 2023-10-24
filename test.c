@@ -10,15 +10,18 @@ int hello(rho_context *ctx, int narg) {
 }
 
 int main(void) {
-  int n;
-
+  rho_runtime *R;
   rho_context *ctx;
-  ctx = rho_open(1024);
+
+  R = rho_new(NULL);
+  assert(R);
+
+  ctx = rho_open(R, 1024);
   assert(ctx);
 
   rho_pushcproto(ctx, hello);
-  n = rho_call(ctx, 0);
-  assert(n == 0);
+
+  assert(rho_call(ctx, 0) == 0);
 
   rho_close(ctx);
   return 0;

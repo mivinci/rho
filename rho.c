@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "list.h"
@@ -106,8 +107,8 @@ struct context {
 
 struct runtime {
   int len;
+  rho_allocator alloc;
   struct list_head contexts;
-  struct allocator allocator;
   struct header *freelists[PMAX];
 };
 
@@ -121,27 +122,22 @@ struct header {
   void *ptr;
 };
 
-struct runtime *rho_new(struct allocator a) {
+struct runtime *rho_new(rho_allocator alloc) {
   struct runtime *rt;
-  if (!(rt = a.alloc(sizeof(*rt))))
+  if (!alloc)
+    alloc = __alloc;
+  if (!(rt = alloc(NULL, sizeof(*rt))))
     return NULL;
-  rt->allocator = a;
+  rt->alloc = alloc;
   rt->len = 0;
   list_head_init(&rt->contexts);
   return rt;
 }
 
-struct context *rho_open(int size) {
-  static struct runtime *__R;
-  if (!__R)  // TODO: lock
-    __R = rho_new(rho_allocator);
-  return rho_openfrom(__R, size);
-}
-
-struct context *rho_openfrom(struct runtime *rt, int size) {
+struct context *rho_open(struct runtime *rt, int size) {
   struct context *ctx;
   void *ptr;
-  if (!(ptr = rt->allocator.alloc(size + sizeof(*ctx))))
+  if (!(ptr = rt->alloc(NULL, size + sizeof(*ctx))))
     return NULL;
   ctx = (struct context *)ptr;
   ctx->base = (struct value *)(ptr + sizeof(*ctx));
@@ -149,17 +145,21 @@ struct context *rho_openfrom(struct runtime *rt, int size) {
   ctx->refs = NULL;
   ctx->rt = rt;
   list_head_init(&ctx->trace);
+  rho_lock(ctx);
   list_add(&ctx->node, &rt->contexts);
   rt->len++;
+  rho_unlock(ctx);
   return ctx;
 }
 
 void rho_close(struct context *ctx) {
   struct runtime *rt = ctx->rt;
   list_del(&ctx->node);
-  rt->allocator.free(ctx);
-  if (--rt->len <= 0)
-    rt->allocator.free(rt);
+  rt->alloc(ctx, 0);
+  rho_lock(ctx);
+  if (rt->len <= 0)
+    rt->alloc(rt, 0);
+  rho_unlock(ctx);
 }
 
 static void *allocgc(struct context *ctx, usize size) {
@@ -167,7 +167,7 @@ static void *allocgc(struct context *ctx, usize size) {
   struct header *hdr;
   usize bits;
   if (size > (1 << PMAX)) {
-    if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
+    if (!(hdr = rt->alloc(NULL, size + sizeof(*hdr))))
       rho_panic(ctx, "out of memory");
     memset(hdr, 0, sizeof(*hdr));
     hdr->size = size;
@@ -180,7 +180,7 @@ static void *allocgc(struct context *ctx, usize size) {
   hdr = rt->freelists[bits];
   if (!hdr) {
     size = 1 << bits;
-    if (!(hdr = rt->allocator.alloc(size + sizeof(*hdr))))
+    if (!(hdr = rt->alloc(NULL, size + sizeof(*hdr))))
       rho_panic(ctx, "out of memory");
     memset(hdr, 0, sizeof(*hdr));
     hdr->size = size;
@@ -201,7 +201,7 @@ static void freegc(struct context *ctx, void *ptr) {
   struct header *hdr = header(ptr);
   usize bits;
   if (hdr->size > (1 << PMAX)) {
-    rt->allocator.free(hdr);
+    rt->alloc(hdr, 0);
     return;
   }
   bits = bits32(hdr->size);
@@ -215,7 +215,7 @@ static void *reallocgc(struct context *ctx, void *ptr, usize newsize) {
   struct runtime *rt = ctx->rt;
   struct header *hdr = header(ptr), *newhdr;
   if (newsize > (1 << PMAX)) {
-    if (!(hdr = rt->allocator.realloc(hdr, newsize + sizeof(*hdr))))
+    if (!(hdr = rt->alloc(hdr, newsize + sizeof(*hdr))))
       rho_panic(ctx, "out of memory");
     hdr->size = newsize;
     hdr->avail += newsize - hdr->size;
@@ -457,6 +457,15 @@ int rho_call(struct context *ctx, int narg) {
       break;
     }
   }
+}
+
+static void *__alloc(void *ptr, size_t size) {
+  if (size == 0)
+    free(ptr);
+  else if (ptr)
+    return realloc(ptr, size);
+  else
+    return malloc(size);
 }
 
 void __rho_push(struct context *ctx, struct value v) { push(ctx, v); }

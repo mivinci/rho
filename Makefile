@@ -11,7 +11,7 @@ librho.a: rho.o
 
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -c -O2 -o $@ $<
 
 
 .PHONY: install

@@ -2,7 +2,6 @@
 #define RHO_H
 
 #include <stdio.h>
-#include <stdlib.h>
 
 #define RHO_INT     0
 #define RHO_FLT     1
@@ -34,7 +33,6 @@
 #define rho_lock(c)   rho_nop
 #define rho_unlock(c) rho_nop
 
-#define rho_allocator             ((struct allocator){malloc, realloc, free})
 #define rho_allocex(c, t, e)      ((t *)__rho_allocgc(c, sizeof(t) + e))
 #define rho_alloc(c, t)           rho_allocex(c, t, 0)
 #define rho_free(c, p)            __rho_freegc(c, p)
@@ -51,6 +49,7 @@ typedef struct context rho_context;
 typedef struct runtime rho_runtime;
 
 typedef int (*cproto)(struct context *, int);
+typedef void *(*rho_allocator)(void *, size_t);
 
 struct value {
   int tag;
@@ -61,31 +60,23 @@ struct value {
   } u;
 };
 
-struct allocator {
-  void *(*alloc)(usize);
-  void *(*realloc)(void *, usize);
-  void (*free)(void *);
-};
-
-// allocates a new rho runtime.
-struct runtime *rho_new(struct allocator);
+// creates a rho runtime with a rho allocator.
+struct runtime *rho_new(rho_allocator);
 // opens a rho context from a rho runtime with a stack size.
-struct context *rho_openfrom(struct runtime *, int);
-// opens a rho context from the default rho runtime with a stack size.
-struct context *rho_open(int);
-// closes a rho context and frees the unerlying runtime if the last is closed.
+struct context *rho_open(struct runtime *, int);
+// closes a rho context and frees the unerlying runtime if the last.
 void rho_close(struct context *);
 
 // traces back through stack frames, writes them to stderr and calls exit(1).
 void rho_panic(struct context *, const char *, ...);
 // raises an error to a rho context.
 void rho_error(struct context *, const char *, ...);
-// given the number of arguments, calls the value on top of the stack, returns
-// the number of values returned by the callee.
+// given the number of arguments on the stack, calls a value right below those
+// arguments and returns the number of values returned by the callee.
 int rho_call(struct context *, int);
 
-void __rho_push(struct context *, struct value);
 struct value __rho_pop(struct context *);
+void __rho_push(struct context *, struct value);
 void *__rho_allocgc(struct context *, usize);
 void __rho_freegc(struct context *, void *);
 void *__rho_append(struct context *, void *, void *, usize, usize);
