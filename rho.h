@@ -22,9 +22,9 @@
 #define rho_cproto(p)  rho_any(p, RHO_CPROTO)
 #define rho_closure(p) rho_any(p, RHO_CLOSURE)
 
-#define rho_toint(p)    ((p)->u.i)
-#define rho_tofloat(p)  ((p)->u.f)
-#define rho_toptr(p)    ((p)->u.ptr)
+#define rho_toint(p)    ((p).u.i)
+#define rho_tofloat(p)  ((p).u.f)
+#define rho_toptr(p)    ((p).u.ptr)
 #define rho_toany(p, t) ((t)rho_toptr(p))
 
 #define rho_push(c, v) __rho_push(c, v)
@@ -60,11 +60,12 @@ struct value {
   } u;
 };
 
-// creates a rho runtime with a rho allocator.
+// creates a rho runtime. the default rho allocator implemented using malloc,
+// realloc and free in stdlib.h will be used if the given one is NULL.
 struct runtime *rho_new(rho_allocator);
-// opens a rho context from a rho runtime with a stack size.
+// opens a rho context from a non-NULL rho runtime with a stack size.
 struct context *rho_open(struct runtime *, int);
-// closes a rho context and frees the unerlying runtime if the last.
+// closes a rho context and, if the last, frees up the underlying rho runtime.
 void rho_close(struct context *);
 
 // traces back through stack frames, writes them to stderr and calls exit(1).

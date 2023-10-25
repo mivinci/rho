@@ -20,19 +20,23 @@
 #define bits32(x) (32 - __builtin_clz(x))
 #define max(a, b) ((a) > (b) ? (a) : (b))
 
-#define tocproto(p)  rho_toany(p, cproto)
-#define toproto(p)   rho_toany(p, struct proto *)
-#define toclosure(p) rho_toany(p, struct closure *)
+#define toint(p)     ((p)->u.i)
+#define tofloat(p)   ((p)->u.f)
+#define toptr(p)     ((p)->u.ptr)
+#define toany(p, t)  ((t)toptr(p))
+#define tocproto(p)  toany(p, cproto)
+#define toproto(p)   toany(p, struct proto *)
+#define toclosure(p) toany(p, struct closure *)
 
 #define binop(ctx, op, top)                                                    \
   {                                                                            \
     struct value *p = --top - 1;                                               \
     switch (tag(p)) {                                                          \
     case RHO_INT:                                                              \
-      rho_toint(p) op## = rho_toint(top);                                      \
+      toint(p) op## = toint(top);                                              \
       break;                                                                   \
     case RHO_FLT:                                                              \
-      rho_tofloat(p) op## = rho_tofloat(top);                                  \
+      tofloat(p) op## = tofloat(top);                                          \
       break;                                                                   \
     default:                                                                   \
       rho_panic(ctx, "invalid operand(s)");                                    \
@@ -44,7 +48,7 @@
     struct value *p = --top - 1;                                               \
     switch (tag(p)) {                                                          \
     case RHO_INT:                                                              \
-      rho_toint(p) op## = rho_toint(top);                                      \
+      toint(p) op## = toint(top);                                              \
       break;                                                                   \
     default:                                                                   \
       rho_panic(ctx, "invalid operand(s)");                                    \
@@ -54,7 +58,7 @@
 #define jmpop(op, pc, top)                                                     \
   {                                                                            \
     struct value *p = --top;                                                   \
-    if ((tag(p) == RHO_INT ? rho_toint(p) : rho_tofloat(p)) op 0)              \
+    if ((tag(p) == RHO_INT ? toint(p) : tofloat(p)) op 0)                      \
       pc += (*(u16 *)pc);                                                      \
   }
 
@@ -121,6 +125,16 @@ struct header {
   usize avail;  // size unused.
   void *ptr;
 };
+
+static void *__alloc(void *ptr, size_t size) {
+  if (size == 0)
+    free(ptr);
+  else if (ptr)
+    return realloc(ptr, size);
+  else
+    return malloc(size);
+  return NULL;
+}
 
 struct runtime *rho_new(rho_allocator alloc) {
   struct runtime *rt;
@@ -318,11 +332,11 @@ enum opcode {
 static int fprintv(FILE *fp, struct value *p) {
   switch (tag(p)) {
   case RHO_INT:
-    return fprintf(fp, "%ld", rho_toint(p));
+    return fprintf(fp, "%ld", toint(p));
   case RHO_FLT:
-    return fprintf(fp, "%lf", rho_tofloat(p));
+    return fprintf(fp, "%lf", tofloat(p));
   default:
-    return fprintf(fp, "<object 0x%p>", rho_toptr(p));
+    return fprintf(fp, "<object 0x%p>", toptr(p));
   }
 }
 
@@ -457,15 +471,6 @@ int rho_call(struct context *ctx, int narg) {
       break;
     }
   }
-}
-
-static void *__alloc(void *ptr, size_t size) {
-  if (size == 0)
-    free(ptr);
-  else if (ptr)
-    return realloc(ptr, size);
-  else
-    return malloc(size);
 }
 
 void __rho_push(struct context *ctx, struct value v) { push(ctx, v); }
