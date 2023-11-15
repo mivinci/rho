@@ -127,19 +127,19 @@ struct header {
 };
 
 static void *__alloc(void *ptr, size_t size) {
-  if (size == 0)
-    free(ptr);
-  else if (ptr)
+  if (size != 0)
     return realloc(ptr, size);
-  else
-    return malloc(size);
-  return NULL;
+  else {
+    free(ptr);
+    return NULL;
+  }
 }
+
+struct runtime *rho_default() { return rho_new(__alloc); }
 
 struct runtime *rho_new(rho_allocator alloc) {
   struct runtime *rt;
-  if (!alloc)
-    alloc = __alloc;
+  rho_assert(alloc);
   if (!(rt = alloc(NULL, sizeof(*rt))))
     return NULL;
   rt->alloc = alloc;
@@ -151,6 +151,7 @@ struct runtime *rho_new(rho_allocator alloc) {
 struct context *rho_open(struct runtime *rt, int size) {
   struct context *ctx;
   void *ptr;
+  rho_assert(rt);
   if (!(ptr = rt->alloc(NULL, size + sizeof(*ctx))))
     return NULL;
   ctx = (struct context *)ptr;

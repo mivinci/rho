@@ -14,7 +14,7 @@ int main(void) {
   rho_runtime *R;
   rho_context *ctx;
 
-  R = rho_new(NULL);  // create a rho runtime
+  R = rho_default();  // create a rho runtime using the default allocator
   assert(R);
 
   ctx = rho_open(R, 1024);  // open a rho context of stack size 1kiB

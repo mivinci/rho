@@ -60,6 +60,8 @@ struct value {
   } u;
 };
 
+// creates a runtime using the default allocator.
+struct runtime *rho_default();
 // creates a rho runtime. the default rho allocator implemented using malloc,
 // realloc and free in stdlib.h will be used if the given one is NULL.
 struct runtime *rho_new(rho_allocator);
