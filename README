@@ -1,0 +1,23 @@
+Rho (aka ρ)
+===========
+
+## Architecture
+
++-------------------------------------+
+|               runtime               |
+| +---------+ +---------+ +---------+ |
+| | context | | context | | context | |
+| | (stack) | | (stack) | | (stack) | |
+| +---------+ +---------+ +---------+ |
++-------------------------------------+
+
+## Goals
+
+  * Stack-base bytecode VM
+  * Lexical scoping
+  * Native concurrency
+  * Embeddable in C/C艹.
+    Optional GC
+
+
+MIT licensed.
