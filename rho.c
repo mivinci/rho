@@ -1,9 +1,13 @@
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "list.h"
 #include "rho.h"
@@ -111,19 +115,30 @@ enum Tk {
   SHL, /* << */
   SHR, /* >> */
 
+  EQ,  /* == */
+  NEQ, /* != */
+
+  ASS, /* = */
+
   PARL, /* ( */
   PARR, /* ) */
   COL,  /* : */
   SEM,  /* ; */
   DOT,  /* . */
   COM,  /* , */
+
+  IF,   /* if */
+  ELSE, /* else*/
+  FOR,  /* for */
+  BRK,  /* break */
+  FN,   /* fn */
 };
 
 static char *TK[] = {
-    "EOT", "INT", "FLT", "STR", "ID", "++", "--", "~", "!", "+",
-    "-",   "*",   "/",   "%",   "**", "//", "&",  "|", "^", "&&",
-    "||",  "<<",  ">>",  "(",   ")",  ":",  ";",  ".", ",",
-};
+    "EOT", "INT", "FLT", "STR",  "ID",  "++",    "--", "~", "!", "+",
+    "-",   "*",   "/",   "%",    "**",  "//",    "&",  "|", "^", "&&",
+    "||",  "<<",  ">>",  "==",   "!=",  "=",     "(",  ")", ":", ";",
+    ".",   ",",   "if",  "else", "for", "break", "fn"};
 
 static char *TG[] = {"int",   "float",   "pointer", "c string",
                      "proto", "c proto", "closure"};
@@ -152,6 +167,11 @@ static int precedence(int tk) {
   case SHL:
   case SHR:
     return 10;
+  case EQ:
+  case NEQ:
+    return 8;
+  case ASS:
+    return 1;
   default:
     return 0;
   }
@@ -457,8 +477,22 @@ static void stmtlist(rho_parser *ps) {
 }
 
 static void stmt(rho_parser *ps) {
-  expr(ps, 0);
-  /* TODO */
+  Tk tk;
+
+  tk = ps->t.kind;
+  switch (tk) {
+  case IF:
+    break;
+  case FOR:
+    break;
+  case FN:
+    break;
+  default: /* expression */
+    expr(ps, 0);
+    tk = ps->t.kind;
+    if (tk == SEM)
+      next(ps);
+  }
 }
 
 /* Top-down expression parser. */
@@ -474,6 +508,7 @@ static void expr(rho_parser *ps, int plv) {
   tk = ps->t.kind;
   lv = precedence(tk);
   while (tk && plv < lv) {
+    /* should we take assignents as expressions? */
     next(ps);
     expr(ps, lv); /* right branch */
     emit(ps, BOP);
@@ -521,7 +556,8 @@ static void unexpr(rho_parser *ps) {
     next(ps);
     return;
   default:
-    return;
+    rho_panic(ps->ctx, "syntax error: unexpected token '%s' at line %d", TK[tk],
+              ps->line);
   }
 }
 
@@ -561,7 +597,9 @@ end:
   next(ps);
 }
 
-static void ident(rho_parser *ps) { /* TODO */
+static void ident(rho_parser *ps) {
+  /* TODO */
+  next(ps);
 }
 
 #define choose(ps, p, c, t1, t2)                                               \
@@ -632,7 +670,10 @@ top:
     ps->t.kind = REV;
     goto defer;
   case '!':
-    ps->t.kind = NOT;
+    choose(ps, p, '=', NEQ, NOT);
+    goto defer;
+  case '=':
+    choose(ps, p, '=', EQ, ASS);
     goto defer;
   case '(':
     ps->t.kind = PARL;
@@ -648,6 +689,9 @@ top:
     goto defer;
   case '.':
     ps->t.kind = DOT;
+    goto defer;
+  case ',':
+    ps->t.kind = COM;
     goto defer;
   case '"':
     pp = p;
@@ -720,9 +764,24 @@ static void emit(rho_parser *ps, byte c) {
   }
 }
 
-int rho_load(rho_context *ctx, const char *path) {
-  /* TODO */
-  return 0;
+rho_closure *rho_load(rho_context *ctx, const char *path) {
+  struct stat sb;
+  byte *p;
+  int fd, n;
+
+  fd = open(path, O_RDONLY);
+  if (fd < 0)
+    rho_panic(ctx, "rho_load: open failed with errno %d", errno);
+
+  n = fstat(fd, &sb);
+  if (n < 0)
+    rho_panic(ctx, "rho_load: fstat failed with errno %d", errno);
+
+  p = mmap(0, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (p < 0)
+    rho_panic(ctx, "rho_load: mmap failed with errno %d", errno);
+
+  return rho_parse(ctx, (const char *)p);
 }
 
 rho_closure *rho_parse(rho_context *ctx, const char *src) {

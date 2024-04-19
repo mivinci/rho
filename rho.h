@@ -87,7 +87,7 @@ rho_runtime *rho_default(void);
 rho_runtime *rho_new(rho_allocator);
 rho_context *rho_open(rho_runtime *, int);
 void rho_close(rho_context *);
-int rho_load(rho_context *, const char *);
+rho_closure *rho_load(rho_context *, const char *);
 rho_closure *rho_parse(rho_context *, const char *);
 int rho_call(rho_context *, int);
 void rho_panic(rho_context *, const char *, ...);
