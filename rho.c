@@ -51,13 +51,15 @@
     }                                                                          \
   } while (0)
 
-typedef struct rho_var rho_var;
-typedef struct rho_ref rho_ref;
-typedef struct rho_proto rho_proto;
-typedef struct rho_closure rho_closure;
 typedef unsigned char byte;
 typedef enum Op Op;
 typedef enum Tk Tk;
+
+#ifdef RHO_DEBUG
+static int debug = 1;
+#else
+static int debug = 0;
+#endif
 
 enum Op {
   NOP,
@@ -222,7 +224,6 @@ struct rho_parser {
   byte *curp;
   int line;
   /* Members below are for debug only. */
-  bool debug;
   int n;
   byte op;
 };
@@ -232,6 +233,7 @@ static void next(rho_parser *);
 static void number(rho_parser *);
 static void ident(rho_parser *);
 static void stmt(rho_parser *);
+static void stmtlist(rho_parser *);
 static void unexpr(rho_parser *);
 static void expr(rho_parser *, int);
 static void emit(rho_parser *, byte);
@@ -267,6 +269,17 @@ rho_context *rho_open(rho_runtime *r, int size) {
   r->len++;
   rho_unlock(ctx);
   return ctx;
+}
+
+void rho_close(rho_context *ctx) {
+  rho_runtime *r;
+
+  r = ctx->r;
+  rho_lock(ctx);
+  list_del(&ctx->link);
+  r->len--;
+  rho_unlock(ctx);
+  r->alloc(ctx, 0);
 }
 
 /*
@@ -434,7 +447,17 @@ static void closerefs(rho_context *ctx, rho_value *arg) {
   }
 }
 
+static void stmtlist(rho_parser *ps) {
+  Tk tk;
+
+  while ((tk = ps->t.kind) != EOT)
+    stmt(ps);
+  emit(ps, RET);
+  emit(ps, 1);
+}
+
 static void stmt(rho_parser *ps) {
+  expr(ps, 0);
   /* TODO */
 }
 
@@ -538,8 +561,7 @@ end:
   next(ps);
 }
 
-static void ident(rho_parser *ps) {
-  /* TODO */
+static void ident(rho_parser *ps) { /* TODO */
 }
 
 #define choose(ps, p, c, t1, t2)                                               \
@@ -676,7 +698,7 @@ static void emit(rho_parser *ps, byte c) {
   pp = &ps->p->code;
   n = ++ps->n;
   *pp = rho_appendgc(ps->ctx, *pp, &c, 1, 1);
-  if (!ps->debug)
+  if (!debug)
     return;
   if (n % 2) {
     ps->op = c;
@@ -691,7 +713,7 @@ static void emit(rho_parser *ps, byte c) {
       printf("%d", (int)c);
       break;
     case PSHC:
-      rho_printv(ps->ctx, ps->p->consts + c);
+      rho_printv(ps->ctx, ps->p->consts + c, 0);
       break;
     }
     putc('\n', stdout);
@@ -700,21 +722,28 @@ static void emit(rho_parser *ps, byte c) {
 
 int rho_load(rho_context *ctx, const char *path) {
   /* TODO */
+  return 0;
 }
 
-int rho_parse(rho_context *ctx, const char *src) {
+rho_closure *rho_parse(rho_context *ctx, const char *src) {
+  rho_closure *cls;
+  rho_proto *p;
   rho_parser ps;
 
+  p = rho_alloc(ctx, rho_proto);
+  memset(p, 0, sizeof *p);
+  cls = makeclosure(ctx, p, 0, 0);
+
   ps.ctx = ctx;
-  ps.src = src;
+  ps.src = (byte *)src;
   ps.curp = ps.src;
   ps.line = 0;
   ps.n = 0;
-  ps.p = 0; /* TODO */
-  
+  ps.p = p;
+
   next(&ps);
-  while (ps.t.kind != EOF)
-    stmt(&ps);
+  stmtlist(&ps);
+  return cls;
 }
 
 bool rho_eq(rho_context *ctx, rho_value *a, rho_value *b) {
@@ -730,15 +759,25 @@ bool rho_eq(rho_context *ctx, rho_value *a, rho_value *b) {
   }
 }
 
-int rho_printv(rho_context *ctx, rho_value *vp) {
+int rho_printv(rho_context *ctx, rho_value *vp, char end) {
+  int n;
+
   switch (tag(vp)) {
   case RHO_INT:
-    return printf("%ld", toint(vp));
+    n = printf("%ld", toint(vp));
+    break;
   case RHO_FLOAT:
-    return printf("%lf", tofloat(vp));
+    n = printf("%lf", tofloat(vp));
+    break;
   default:
-    return printf("<object 0x%p>", toptr(vp));
+    n = printf("<object 0x%p>", toptr(vp));
+    break;
   }
+  if (end) {
+    putc(end, stdout);
+    n++;
+  }
+  return n;
 }
 
 noreturn void rho_panic(rho_context *ctx, const char *fmt, ...) {
@@ -752,8 +791,7 @@ noreturn void rho_panic(rho_context *ctx, const char *fmt, ...) {
   exit(1);
 }
 
-static void traceback(rho_context *ctx) {
-  /* TODO */
+static void traceback(rho_context *ctx) { /* TODO */
 }
 
 void *rho_allocgc(rho_context *ctx, int size) {
@@ -888,67 +926,66 @@ rho_value rho_cast(rho_context *ctx, rho_value *vp, int t) {
 
 rho_runtime *rho_default(void) { return rho_new(__alloc); }
 
-int main(int argc, char **argv) {
-  rho_parser ps;
-  rho_runtime *R;
-  rho_context *c0;
-  rho_value v;
-  // int n, i;
-  // Tk tk;
-  // char buf[32];
+// int main(int argc, char **argv) {
+//   rho_parser ps;
+//   rho_runtime *R;
+//   rho_context *c0;
+//   rho_value v;
+//   // int n, i;
+//   // Tk tk;
+//   // char buf[32];
 
-  R = rho_new(__alloc);
-  c0 = rho_open(R, 4096);
+//   R = rho_new(__alloc);
+//   c0 = rho_open(R, 4096);
 
-  rho_proto p;
-  memset(&p, 0, sizeof p);
-  ps.ctx = c0;
-  ps.p = &p;
-  ps.line = 0;
-  ps.src = (byte *)argv[1];
-  // ps.src = (byte *)"3.0/2";
-  ps.curp = ps.src;
-  ps.ctx = c0;
-  ps.debug = true;
-  ps.n = 0;
+//   rho_proto p;
+//   memset(&p, 0, sizeof p);
+//   ps.ctx = c0;
+//   ps.p = &p;
+//   ps.line = 0;
+//   ps.src = (byte *)argv[1];
+//   // ps.src = (byte *)"3.0/2";
+//   ps.curp = ps.src;
+//   ps.ctx = c0;
+//   ps.n = 0;
 
-  next(&ps);
-  expr(&ps, 0);
+//   next(&ps);
+//   expr(&ps, 0);
 
-  emit(&ps, RET);
-  emit(&ps, 1);
+//   emit(&ps, RET);
+//   emit(&ps, 1);
 
-  // if (!ps.debug) {
-  //   for (i = 0; i < ps.n; i++) {
-  //     printf("0x%02X\n", p.code[i]);
-  //   }
-  // }
-  rho_pushclosure(c0, makeclosure(c0, &p, 0, 0));
-  rho_call(c0, 0);
-  v = rho_pop(c0);
-  rho_printv(c0, &v);
-  exit(0);
-  // printf("%d %d\n", (int)ps.p->code[0], (int)ps.p->code[1]);
-  // printf("%ld\n", ps.p->consts[0].u.i);
+//   // if (!ps.debug) {
+//   //   for (i = 0; i < ps.n; i++) {
+//   //     printf("0x%02X\n", p.code[i]);
+//   //   }
+//   // }
+//   rho_pushclosure(c0, makeclosure(c0, &p, 0, 0));
+//   rho_call(c0, 0);
+//   v = rho_pop(c0);
+//   rho_printv(c0, &v);
+//   exit(0);
+//   // printf("%d %d\n", (int)ps.p->code[0], (int)ps.p->code[1]);
+//   // printf("%ld\n", ps.p->consts[0].u.i);
 
-  // for (;;) {
-  //   next(&ps);
-  //   tk = ps.t.kind;
-  //   switch (tk) {
-  //   case EOT:
-  //     exit(0);
-  //   case INT:
-  //   case FLT:
-  //   case ID:
-  //   case STR:
-  //     printf("%s  (", TK[tk]);
-  //     memccpy(buf, ps.t.p, 1, ps.t.len);
-  //     buf[ps.t.len] = '\0';
-  //     printf("%s", buf);
-  //     printf(")\n");
-  //     break;
-  //   default:
-  //     printf("%s\n", TK[tk]);
-  //   }
-  // }
-}
+//   // for (;;) {
+//   //   next(&ps);
+//   //   tk = ps.t.kind;
+//   //   switch (tk) {
+//   //   case EOT:
+//   //     exit(0);
+//   //   case INT:
+//   //   case FLT:
+//   //   case ID:
+//   //   case STR:
+//   //     printf("%s  (", TK[tk]);
+//   //     memccpy(buf, ps.t.p, 1, ps.t.len);
+//   //     buf[ps.t.len] = '\0';
+//   //     printf("%s", buf);
+//   //     printf(")\n");
+//   //     break;
+//   //   default:
+//   //     printf("%s\n", TK[tk]);
+//   //   }
+//   // }
+// }

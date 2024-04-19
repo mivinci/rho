@@ -17,7 +17,9 @@ extern "C" {
 #define noreturn __attribute__((noreturn))
 #endif
 
-#define rho_assert(e)
+
+#include <assert.h>
+#define rho_assert(e) assert(e)
 
 #define rho_lock(c)
 #define rho_unlock(c)
@@ -39,6 +41,8 @@ extern "C" {
 #define rho_alloc(c, t)           rho_allocex(c, t, 0)
 #define rho_free(c, p)            rho_freegc(c, p)
 #define rho_append(c, d, s, n, t) ((t *)rho_appendgc(c, d, s, n, sizeof(t)))
+
+#define rho_println(c, p) rho_printv(c, p, '\n')
 
 #define rho_pushint(c, n)     rho_push(c, rho_int(n))
 #define rho_pushfloat(c, v)   rho_push(c, rho_float(v))
@@ -62,6 +66,10 @@ typedef struct rho_runtime rho_runtime;
 typedef struct rho_context rho_context;
 typedef struct rho_value rho_value;
 typedef struct rho_parser rho_parser;
+typedef struct rho_var rho_var;
+typedef struct rho_ref rho_ref;
+typedef struct rho_proto rho_proto;
+typedef struct rho_closure rho_closure;
 typedef struct rho_header rho_header;
 typedef void *(*rho_allocator)(void *, int);
 typedef int (*rho_cproto)(rho_context *, int);
@@ -78,14 +86,16 @@ struct rho_value {
 rho_runtime *rho_default(void);
 rho_runtime *rho_new(rho_allocator);
 rho_context *rho_open(rho_runtime *, int);
+void rho_close(rho_context *);
+int rho_load(rho_context *, const char *);
+rho_closure *rho_parse(rho_context *, const char *);
 int rho_call(rho_context *, int);
 void rho_panic(rho_context *, const char *, ...);
 bool rho_eq(rho_context *, rho_value *, rho_value *);
 void rho_push(rho_context *, rho_value);
 rho_value rho_pop(rho_context *);
 rho_value rho_cast(rho_context *, rho_value *, int);
-int rho_printv(rho_context *, rho_value *);
-
+int rho_printv(rho_context *, rho_value *, char);
 void *rho_allocgc(rho_context *, int);
 void rho_freegc(rho_context *, void *);
 void *rho_appendgc(rho_context *, void *, void *, int, int);

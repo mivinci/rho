@@ -1,9 +1,13 @@
 CC     := gcc
 AR     := ar
-CFLAGS := -Wall -O2
+CFLAGS := -Wall
 
-ifeq (DEBUG, 1)
-	CFLAGS += -g -DDEBUG
+ifeq ($(OPT), 1)
+	CFLAGS += O2
+endif
+
+ifeq ($(DEBUG), 1)
+	CFLAGS += -g -DRHO_DEBUG
 endif
 
 
@@ -23,3 +27,10 @@ clean:
 	rm *.out
 	rm *.o
 	rm *.a
+
+
+test_parse.out: test_parse.c rho.h librho.a
+	$(CC) $(CFLAGS) -o $@ test_parse.c -L. -lrho
+
+test_load.out: test_load.c rho.h librho.a
+	$(CC) $(CFLAGS) -o $@ test_load.c -L. -lrho
