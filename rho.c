@@ -71,17 +71,15 @@ enum Op {
   PSHR,
   PSH,
   POP,
-
   BOP,
-
   CALL,
   RET,
-
   MAKE,
+  ATTR,
 };
 
-static char *OP[] = {"nop", "pshc", "pshr", "psh", "pop",
-                     "bop", "call", "ret",  "make"};
+static char *OP[] = {"nop", "pshc", "pshr", "psh",  "pop",
+                     "bop", "call", "ret",  "make", "attr"};
 
 enum Tk {
   EOT, /* end of token */
@@ -127,18 +125,22 @@ enum Tk {
   DOT,  /* . */
   COM,  /* , */
 
+  _kw,
   IF,   /* if */
   ELSE, /* else*/
   FOR,  /* for */
   BRK,  /* break */
+  VAR,  /* var */
   FN,   /* fn */
+  STRT, /* struct */
+  _kwend,
 };
 
 static char *TK[] = {
-    "EOT", "INT", "FLT", "STR",  "ID",  "++",    "--", "~", "!", "+",
-    "-",   "*",   "/",   "%",    "**",  "//",    "&",  "|", "^", "&&",
-    "||",  "<<",  ">>",  "==",   "!=",  "=",     "(",  ")", ":", ";",
-    ".",   ",",   "if",  "else", "for", "break", "fn"};
+    "EOT", "INT", "FLT", "STR",  "ID",  "++",    "--",  "~",  "!",     "+",
+    "-",   "*",   "/",   "%",    "**",  "//",    "&",   "|",  "^",     "&&",
+    "||",  "<<",  ">>",  "==",   "!=",  "=",     "(",   ")",  ":",     ";",
+    ".",   ",",   "if",  "else", "for", "break", "var", "fn", "struct"};
 
 static char *TG[] = {"int",   "float",   "pointer", "c string",
                      "proto", "c proto", "closure"};
@@ -189,6 +191,7 @@ struct rho_context {
   rho_value *top;
   rho_value *sp;
   rho_ref *openrefs;
+  rho_type *types;
   struct list_head link;
 };
 
@@ -200,6 +203,11 @@ struct rho_header {
   void *ptr;
 };
 
+struct rho_string {
+  byte *p;
+  int len;
+};
+
 struct rho_ref {
   rho_ref *next;
   rho_value *vp;
@@ -207,22 +215,30 @@ struct rho_ref {
 };
 
 struct rho_var {
-  int islocal : 1;
+  rho_type *type;
+  rho_string name;
   int isconst : 1;
-  /* Index into proto::vars if var::islocal or closure::refs
-     of the enclosing closure. */
-  int idx;
+  int islocal : 1;
+  int idx; /* index into proto::vars of the parent function if ::islocal,
+              otherwise index into closure::refs of the parent function.  */
+};
+
+struct rho_type {
+  rho_string name;
+  rho_type **attr;
+  int callable : 1;
+  int alias;
 };
 
 struct rho_proto {
   rho_proto *prev;
   rho_proto **p;
-  rho_var *vars; /* arguments and local variables */
-  rho_var *refs;
-  rho_value *consts;
+  rho_var *vars;     /* arguments and local variables. */
+  rho_var *refs;     /* closure variables. */
+  rho_value *consts; /* constants */
   byte *code;
-  int nin;
-  int nout;
+  int nin;  /* the number of arguments. */
+  int nout; /* the number of values returned. */
 };
 
 struct rho_closure {
@@ -232,14 +248,16 @@ struct rho_closure {
 
 struct token {
   int kind;
-  int len;
-  byte *p;
+  int iskw : 1;
+  rho_string s;
 };
 
+/* An LL(1) parser */
 struct rho_parser {
   rho_context *ctx;
   rho_proto *p;
   struct token t;
+  struct token ahead;
   byte *src;
   byte *curp;
   int line;
@@ -250,12 +268,17 @@ struct rho_parser {
 
 static int precedence(int);
 static void next(rho_parser *);
+static void peek(rho_parser *);
 static void number(rho_parser *);
 static void ident(rho_parser *);
+static void attr(rho_parser *);
+static void assign(rho_parser *);
 static void stmt(rho_parser *);
 static void stmtlist(rho_parser *);
+static void variable(rho_parser *);
 static void unexpr(rho_parser *);
 static void expr(rho_parser *, int);
+static void scan(rho_parser *, struct token *);
 static void emit(rho_parser *, byte);
 static void traceback(rho_context *);
 static void closerefs(rho_context *, rho_value *);
@@ -274,6 +297,21 @@ rho_runtime *rho_new(rho_allocator alloc) {
   return r;
 }
 
+static void inittypes(rho_context *ctx) {
+  rho_type *tp;
+  int sz;
+
+  sz = 3 * sizeof(struct rho_type);
+  tp = rho_allocgc(ctx, sz);
+  memset(tp, 0, sz);
+  tp[0].name.p = (byte *)TG[RHO_INT];
+  tp[0].name.len = 3;
+  tp[1].name.p = (byte *)TG[RHO_FLOAT];
+  tp[1].name.len = 5;
+  header(tp)->avail -= sz;
+  ctx->types = tp;
+}
+
 rho_context *rho_open(rho_runtime *r, int size) {
   rho_context *ctx;
 
@@ -284,6 +322,7 @@ rho_context *rho_open(rho_runtime *r, int size) {
   ctx->top = ctx->sp + size;
   ctx->openrefs = NULL;
   ctx->r = r;
+  inittypes(ctx);
   rho_lock(ctx);
   list_add(&ctx->link, &r->ctx);
   r->len++;
@@ -299,6 +338,7 @@ void rho_close(rho_context *ctx) {
   list_del(&ctx->link);
   r->len--;
   rho_unlock(ctx);
+  r->alloc(ctx->types, 0);
   r->alloc(ctx, 0);
 }
 
@@ -467,6 +507,13 @@ static void closerefs(rho_context *ctx, rho_value *arg) {
   }
 }
 
+#define expect(ps, tk)                                                         \
+  do {                                                                         \
+    if (ps->t.kind != tk)                                                      \
+      rho_panic(ps->ctx, "parse error: expect token %d at line %d", tk,        \
+                ps->line);                                                     \
+  } while (0)
+
 static void stmtlist(rho_parser *ps) {
   Tk tk;
 
@@ -482,20 +529,61 @@ static void stmt(rho_parser *ps) {
   tk = ps->t.kind;
   switch (tk) {
   case IF:
-    break;
+    /* TODO: if statement */
+    return;
   case FOR:
-    break;
+    /* TODO: for statement */
+    return;
+  case VAR:
+    next(ps);
+    expect(ps, ID);
+    variable(ps);
+    return;
   case FN:
-    break;
-  default: /* expression */
-    expr(ps, 0);
-    tk = ps->t.kind;
-    if (tk == SEM)
-      next(ps);
+    /* TODO: function declaration*/
+    return;
+  case STRT:
+    /* TODO: struct declaration */
+    return;
+  default:
+    expr(ps, 0); /* expression */
   }
 }
 
-/* Top-down expression parser. */
+static void variable(rho_parser *ps) {
+  rho_var v, *vp, **vpp;
+  rho_type *tp;
+  int n, i;
+
+  n = len(ps->p->vars);
+  for (i = 0; i < n; i++) {
+    vp = ps->p->vars + i;
+    if (rho_strcmp(&vp->name, &ps->t.s) == 0)
+      rho_panic(ps->ctx,
+                "parse error: redundant variable declaration at line %d",
+                ps->line);
+  }
+  v.idx = i;
+  v.isconst = false;
+  v.name = ps->t.s;
+
+  next(ps);
+  n = len(ps->ctx->types);
+  for (i = 0; i < n; i++) {
+    tp = ps->ctx->types + i;
+    if (rho_strcmp(&tp->name, &ps->t.s) == 0)
+      goto end;
+  }
+  rho_panic(ps->ctx, "parse error: undefined type at line %d", ps->line);
+
+end:
+  v.type = tp;
+  vpp = &ps->p->vars;
+  *vpp = rho_append(ps->ctx, *vpp, &v, 1, rho_var);
+  next(ps);
+}
+
+/* Top-down expression parsing. */
 static void expr(rho_parser *ps, int plv) {
   Tk tk;
   int lv;
@@ -535,11 +623,18 @@ static void unexpr(rho_parser *ps) {
   case ID:
     ident(ps);
     tk = ps->t.kind;
-    if (tk == INC || tk == DEC) {
+    switch (tk) {
+    case INC:
+    case DEC:
       emit(ps, tk);
       next(ps);
+      return;
+    case DOT:
+      attr(ps);
+      return;
+    default:
+      return;
     }
-    return;
   case NOT:
   case REV:
     next(ps);
@@ -569,15 +664,15 @@ static void number(rho_parser *ps) {
 
   switch (ps->t.kind) {
   case INT:
-    k = strtol((const char *)ps->t.p, NULL, 10);
+    k = strtol((const char *)ps->t.s.p, NULL, 10);
     if (errno != 0)
-      rho_panic(ps->ctx, "parse: strtol failed with errno %d", errno);
+      rho_panic(ps->ctx, "parse error: strtol failed with errno %d", errno);
     v = rho_int(k);
     break;
   case FLT:
-    d = strtod((const char *)ps->t.p, NULL);
+    d = strtod((const char *)ps->t.s.p, NULL);
     if (errno != 0)
-      rho_panic(ps->ctx, "parse: strtod failed with errno %d", errno);
+      rho_panic(ps->ctx, "parse error: strtod failed with errno %d", errno);
     v = rho_float(d);
     break;
   }
@@ -598,21 +693,79 @@ end:
 }
 
 static void ident(rho_parser *ps) {
-  /* TODO */
+  struct token *t;
+  rho_var v, *vp, **vpp;
+  rho_proto *p;
+  int n, i;
+
+  t = &ps->t;
+  for (p = ps->p; p; p = p->prev) {
+    vpp = &p->refs;
+    n = len(*vpp);
+    for (i = 0; i < n; i++) {
+      vp = p->refs + i;
+      if (rho_strcmp(&t->s, &vp->name) == 0)
+        goto end;
+    }
+    vpp = &p->vars;
+    n = len(*vpp);
+    for (i = 0; i < n; i++) {
+      vp = p->vars + i;
+      if (rho_strcmp(&t->s, &vp->name) == 0)
+        goto end;
+    }
+  }
+  rho_panic(ps->ctx, "parse error: undefined variable at line %d", ps->line);
+end:
+  v = *vp;
+  v.islocal = i > 1 ? false : true;
+  *vpp = rho_append(ps->ctx, *vpp, &v, 1, rho_var);
+  emit(ps, i > 0 ? PSHR : PSH);
+  emit(ps, v.idx);
   next(ps);
 }
 
-#define choose(ps, p, c, t1, t2)                                               \
+static void attr(rho_parser *ps) {
+  /* TODO: how do i know in which var we can find attr from? */
+  emit(ps, ATTR);
+  next(ps);
+}
+
+static void assign(rho_parser *ps) { next(ps); }
+
+static void peek(rho_parser *ps) { scan(ps, &ps->ahead); }
+
+static void next(rho_parser *ps) {
+  if (ps->ahead.kind == -1) {
+    scan(ps, &ps->t);
+    return;
+  }
+  ps->t = ps->ahead;
+  ps->ahead.kind = -1;
+}
+
+void kw(struct token *t) {
+  int i;
+
+  for (i = _kw + 1; i < _kwend; i++) {
+    if (strncmp(TK[i], (const char *)t->s.p, t->s.len) == 0) {
+      t->iskw = true;
+      t->kind = i;
+    }
+  }
+}
+
+#define choose(t, p, c, t1, t2)                                                \
   do {                                                                         \
     if (*(p) != c)                                                             \
-      (ps)->t.kind = t2;                                                       \
+      (t)->kind = t2;                                                          \
     else {                                                                     \
-      (ps)->t.kind = t1;                                                       \
+      (t)->kind = t1;                                                          \
       (p)++;                                                                   \
     }                                                                          \
   } while (0)
 
-static void next(rho_parser *ps) {
+static void scan(rho_parser *ps, struct token *t) {
   byte *p, *pp;
   Tk tk;
 
@@ -621,7 +774,7 @@ static void next(rho_parser *ps) {
 top:
   switch (*p++) {
   case '\0':
-    ps->t.kind = EOT;
+    t->kind = EOT;
     goto defer;
   case '\n':
     ps->line++;
@@ -631,75 +784,75 @@ top:
   case '\r':
     goto top;
   case '/':
-    choose(ps, p, '/', CUT, DIV);
+    choose(t, p, '/', CUT, DIV);
     goto defer;
   case '*':
-    choose(ps, p, '*', POW, MUL);
+    choose(t, p, '*', POW, MUL);
     goto defer;
   case '-':
-    choose(ps, p, '-', DEC, SUB);
+    choose(t, p, '-', DEC, SUB);
     goto defer;
   case '+':
-    choose(ps, p, '+', INC, ADD);
+    choose(t, p, '+', INC, ADD);
     goto defer;
   case '%':
-    ps->t.kind = MOD;
+    t->kind = MOD;
     goto defer;
   case '&':
-    choose(ps, p, '&', LAND, AND);
+    choose(t, p, '&', LAND, AND);
     goto defer;
   case '|':
-    choose(ps, p, '|', LOR, OR);
+    choose(t, p, '|', LOR, OR);
     goto defer;
   case '<':
     if (*p != '<')
       goto err;
     p++;
-    ps->t.kind = SHL;
+    t->kind = SHL;
     goto defer;
   case '>':
     if (*p != '>')
       goto err;
     p++;
-    ps->t.kind = SHR;
+    t->kind = SHR;
     goto defer;
   case '^':
-    ps->t.kind = XOR;
+    t->kind = XOR;
     goto defer;
   case '~':
-    ps->t.kind = REV;
+    t->kind = REV;
     goto defer;
   case '!':
-    choose(ps, p, '=', NEQ, NOT);
+    choose(t, p, '=', NEQ, NOT);
     goto defer;
   case '=':
-    choose(ps, p, '=', EQ, ASS);
+    choose(t, p, '=', EQ, ASS);
     goto defer;
   case '(':
-    ps->t.kind = PARL;
+    t->kind = PARL;
     goto defer;
   case ')':
-    ps->t.kind = PARR;
+    t->kind = PARR;
     goto defer;
   case ':':
-    ps->t.kind = COL;
+    t->kind = COL;
     goto defer;
   case ';':
-    ps->t.kind = SEM;
+    t->kind = SEM;
     goto defer;
   case '.':
-    ps->t.kind = DOT;
+    t->kind = DOT;
     goto defer;
   case ',':
-    ps->t.kind = COM;
+    t->kind = COM;
     goto defer;
   case '"':
     pp = p;
     while (*p != '"' && *p != '\0')
       p++;
-    ps->t.p = pp;
-    ps->t.len = p - pp;
-    ps->t.kind = STR;
+    t->s.p = pp;
+    t->s.len = p - pp;
+    t->kind = STR;
     p++;
     goto defer;
   default:
@@ -711,18 +864,19 @@ top:
           tk = FLT;
         p++;
       }
-      ps->t.p = pp;
-      ps->t.len = p - pp;
-      ps->t.kind = tk;
+      t->s.p = pp;
+      t->s.len = p - pp;
+      t->kind = tk;
       goto defer;
     }
     if (isalpha(*(p - 1)) || *(p - 1) == '_') {
       pp = p - 1;
       while (isalpha(*p) || *p == '_')
         p++;
-      ps->t.p = pp;
-      ps->t.len = p - pp;
-      ps->t.kind = ID;
+      t->s.p = pp;
+      t->s.len = p - pp;
+      t->kind = ID;
+      kw(t);
       goto defer;
     }
     goto err;
@@ -799,6 +953,7 @@ rho_closure *rho_parse(rho_context *ctx, const char *src) {
   ps.line = 0;
   ps.n = 0;
   ps.p = p;
+  ps.ahead.kind = -1;
 
   next(&ps);
   stmtlist(&ps);
@@ -984,6 +1139,13 @@ rho_value rho_cast(rho_context *ctx, rho_value *vp, int t) {
 }
 
 rho_runtime *rho_default(void) { return rho_new(__alloc); }
+
+int rho_strcmp(rho_string *s, rho_string *t) {
+  int n;
+  /* TODO: compare hashes before using strncmp */
+  n = s->len - t->len;
+  return n == 0 ? strncmp((const char *)s->p, (const char *)t->p, n) : n;
+}
 
 // int main(int argc, char **argv) {
 //   rho_parser ps;

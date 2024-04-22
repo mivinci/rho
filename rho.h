@@ -17,7 +17,6 @@ extern "C" {
 #define noreturn __attribute__((noreturn))
 #endif
 
-
 #include <assert.h>
 #define rho_assert(e) assert(e)
 
@@ -68,9 +67,11 @@ typedef struct rho_value rho_value;
 typedef struct rho_parser rho_parser;
 typedef struct rho_var rho_var;
 typedef struct rho_ref rho_ref;
+typedef struct rho_type rho_type;
 typedef struct rho_proto rho_proto;
 typedef struct rho_closure rho_closure;
 typedef struct rho_header rho_header;
+typedef struct rho_string rho_string;
 typedef void *(*rho_allocator)(void *, int);
 typedef int (*rho_cproto)(rho_context *, int);
 
@@ -99,6 +100,7 @@ int rho_printv(rho_context *, rho_value *, char);
 void *rho_allocgc(rho_context *, int);
 void rho_freegc(rho_context *, void *);
 void *rho_appendgc(rho_context *, void *, void *, int, int);
+int rho_strcmp(rho_string *, rho_string *);
 
 #ifdef __cplusplus
 }
