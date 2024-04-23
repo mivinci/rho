@@ -130,6 +130,7 @@ enum Tk {
   ELSE, /* else*/
   FOR,  /* for */
   BRK,  /* break */
+  CTN,
   VAR,  /* var */
   FN,   /* fn */
   STRT, /* struct */
@@ -137,13 +138,14 @@ enum Tk {
 };
 
 static char *TK[] = {
-    "EOT", "INT", "FLT", "STR",  "ID",  "++",    "--",  "~",  "!",     "+",
-    "-",   "*",   "/",   "%",    "**",  "//",    "&",   "|",  "^",     "&&",
-    "||",  "<<",  ">>",  "==",   "!=",  "=",     "(",   ")",  ":",     ";",
-    ".",   ",",   "if",  "else", "for", "break", "var", "fn", "struct"};
+    "EOT",   "INT",      "FLT", "STR", "ID",     "++",    "--", "~",    "!",
+    "+",     "-",        "*",   "/",   "%",      "**",    "//", "&",    "|",
+    "^",     "&&",       "||",  "<<",  ">>",     "==",    "!=", "=",    "(",
+    ")",     ":",        ";",   ".",   ",",      "_kw",   "if", "else", "for",
+    "break", "continue", "var", "fn",  "struct", "_kwend"};
 
-static char *TG[] = {"int",   "float",   "pointer", "c string",
-                     "proto", "c proto", "closure"};
+static char *TG[] = {"int",      "float", "bool",    "pointer",
+                     "c string", "proto", "c proto", "closure"};
 
 static int precedence(int tk) {
   switch (tk) {
@@ -308,6 +310,8 @@ static void inittypes(rho_context *ctx) {
   tp[0].name.len = 3;
   tp[1].name.p = (byte *)TG[RHO_FLOAT];
   tp[1].name.len = 5;
+  tp[2].name.p = (byte *)TG[RHO_BOOL];
+  tp[2].name.len = 4;
   header(tp)->avail -= sz;
   ctx->types = tp;
 }
@@ -338,7 +342,7 @@ void rho_close(rho_context *ctx) {
   list_del(&ctx->link);
   r->len--;
   rho_unlock(ctx);
-  r->alloc(ctx->types, 0);
+  // r->alloc(ctx->types, 0);
   r->alloc(ctx, 0);
 }
 
@@ -510,7 +514,7 @@ static void closerefs(rho_context *ctx, rho_value *arg) {
 #define expect(ps, tk)                                                         \
   do {                                                                         \
     if (ps->t.kind != tk)                                                      \
-      rho_panic(ps->ctx, "parse error: expect token %d at line %d", tk,        \
+      rho_panic(ps->ctx, "parse error: expect token %s at line %d", TK[tk],        \
                 ps->line);                                                     \
   } while (0)
 
@@ -696,9 +700,10 @@ static void ident(rho_parser *ps) {
   struct token *t;
   rho_var v, *vp, **vpp;
   rho_proto *p;
-  int n, i;
+  int n, i, scope;
 
   t = &ps->t;
+  scope = 0;
   for (p = ps->p; p; p = p->prev) {
     vpp = &p->refs;
     n = len(*vpp);
@@ -714,13 +719,18 @@ static void ident(rho_parser *ps) {
       if (rho_strcmp(&t->s, &vp->name) == 0)
         goto end;
     }
+    scope++;
   }
   rho_panic(ps->ctx, "parse error: undefined variable at line %d", ps->line);
 end:
   v = *vp;
-  v.islocal = i > 1 ? false : true;
-  *vpp = rho_append(ps->ctx, *vpp, &v, 1, rho_var);
-  emit(ps, i > 0 ? PSHR : PSH);
+  v.islocal = scope > 1 ? false : true;
+  if (scope == 0) {
+    emit(ps, PSH);
+  } else {
+    *vpp = rho_append(ps->ctx, *vpp, &v, 1, rho_var);
+    emit(ps, PSHR);
+  }
   emit(ps, v.idx);
   next(ps);
 }
@@ -747,10 +757,13 @@ static void next(rho_parser *ps) {
 void kw(struct token *t) {
   int i;
 
+  if (t->s.len < 2)
+    return;
   for (i = _kw + 1; i < _kwend; i++) {
     if (strncmp(TK[i], (const char *)t->s.p, t->s.len) == 0) {
       t->iskw = true;
       t->kind = i;
+      return;
     }
   }
 }
@@ -890,8 +903,9 @@ err:
 }
 
 static void emit(rho_parser *ps, byte c) {
+  rho_var *vp;
   byte **pp;
-  int n;
+  int n, i;
 
   pp = &ps->p->code;
   n = ++ps->n;
@@ -912,6 +926,13 @@ static void emit(rho_parser *ps, byte c) {
       break;
     case PSHC:
       rho_printv(ps->ctx, ps->p->consts + c, 0);
+      break;
+    case PSH:
+      printf("%-4d (", (int)c);
+      vp = ps->p->vars + c;
+      for (i = 0; i < vp->name.len; i++)
+        putc(vp->name.p[i], stdout);
+      printf(")");
       break;
     }
     putc('\n', stdout);
@@ -1144,7 +1165,7 @@ int rho_strcmp(rho_string *s, rho_string *t) {
   int n;
   /* TODO: compare hashes before using strncmp */
   n = s->len - t->len;
-  return n == 0 ? strncmp((const char *)s->p, (const char *)t->p, n) : n;
+  return n == 0 ? strncmp((const char *)s->p, (const char *)t->p, t->len) : n;
 }
 
 // int main(int argc, char **argv) {

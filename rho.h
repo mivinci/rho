@@ -55,11 +55,12 @@ extern "C" {
 
 #define RHO_INT     0
 #define RHO_FLOAT   1
-#define RHO_PTR     2
-#define RHO_CSTR    3
-#define RHO_PROTO   4
-#define RHO_CPROTO  5
-#define RHO_CLOSURE 6
+#define RHO_BOOL    2
+#define RHO_PTR     3
+#define RHO_CSTR    4
+#define RHO_PROTO   5
+#define RHO_CPROTO  6
+#define RHO_CLOSURE 7
 
 typedef struct rho_runtime rho_runtime;
 typedef struct rho_context rho_context;
