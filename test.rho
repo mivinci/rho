@@ -1,4 +1,22 @@
-var a int
-var b int
+/*
+a = 1
+a, b, c = 1, 2, 3
+a()
+a.b.c()
 
-1+ 2*3/4%5 + a-b
+assign := varlist = expr
+call := varchain ( arglist )
+varchain := ident [. varchain]
+varlist := ident [, varlist]
+*/
+
+var a int
+a, b = 1, 2
+a + 1
+// pshc 0 (1)
+// pshc 1 (2)
+// pop  1 (b)
+// pop  0 (a)
+// psh  0 (a)
+// pshc 0 (1)
+// bop    (+)

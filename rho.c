@@ -83,6 +83,7 @@ static char *OP[] = {"nop", "pshc", "pshr", "psh",  "pop",
 
 enum Tk {
   EOT, /* end of token */
+  CMT, /* // */
 
   INT, /* 114151 */
   FLT, /* 3.141592 */
@@ -101,7 +102,6 @@ enum Tk {
   DIV, /* / */
   MOD, /* % */
   POW, /* ** */
-  CUT, /* // */
 
   AND, /* & */
   OR,  /* | */
@@ -138,8 +138,8 @@ enum Tk {
 };
 
 static char *TK[] = {
-    "EOT",   "INT",      "FLT", "STR", "ID",     "++",    "--", "~",    "!",
-    "+",     "-",        "*",   "/",   "%",      "**",    "//", "&",    "|",
+    "EOT",   "//",       "INT", "FLT", "STR",    "ID",    "++", "--",   "~",
+    "!",     "+",        "-",   "*",   "/",      "%",     "**", "&",    "|",
     "^",     "&&",       "||",  "<<",  ">>",     "==",    "!=", "=",    "(",
     ")",     ":",        ";",   ".",   ",",      "_kw",   "if", "else", "for",
     "break", "continue", "var", "fn",  "struct", "_kwend"};
@@ -156,7 +156,6 @@ static int precedence(int tk) {
   case DIV:
   case MOD:
   case POW:
-  case CUT:
     return 12;
   case OR:
     return 5;
@@ -514,7 +513,7 @@ static void closerefs(rho_context *ctx, rho_value *arg) {
 #define expect(ps, tk)                                                         \
   do {                                                                         \
     if (ps->t.kind != tk)                                                      \
-      rho_panic(ps->ctx, "parse error: expect token %s at line %d", TK[tk],        \
+      rho_panic(ps->ctx, "parse error: expect token %s at line %d", TK[tk],    \
                 ps->line);                                                     \
   } while (0)
 
@@ -532,6 +531,9 @@ static void stmt(rho_parser *ps) {
 
   tk = ps->t.kind;
   switch (tk) {
+  case CMT:
+    next(ps);
+    return;
   case IF:
     /* TODO: if statement */
     return;
@@ -600,7 +602,6 @@ static void expr(rho_parser *ps, int plv) {
   tk = ps->t.kind;
   lv = precedence(tk);
   while (tk && plv < lv) {
-    /* should we take assignents as expressions? */
     next(ps);
     expr(ps, lv); /* right branch */
     emit(ps, BOP);
@@ -611,7 +612,7 @@ static void expr(rho_parser *ps, int plv) {
 }
 
 static void unexpr(rho_parser *ps) {
-  Tk tk;
+  Tk tk, ah;
 
   tk = ps->t.kind;
   switch (tk) {
@@ -625,20 +626,9 @@ static void unexpr(rho_parser *ps) {
     }
     return;
   case ID:
-    ident(ps);
-    tk = ps->t.kind;
-    switch (tk) {
-    case INC:
-    case DEC:
-      emit(ps, tk);
-      next(ps);
-      return;
-    case DOT:
-      attr(ps);
-      return;
-    default:
-      return;
-    }
+    /* TODO */
+    next(ps);
+    return;
   case NOT:
   case REV:
     next(ps);
@@ -722,6 +712,7 @@ static void ident(rho_parser *ps) {
     scope++;
   }
   rho_panic(ps->ctx, "parse error: undefined variable at line %d", ps->line);
+
 end:
   v = *vp;
   v.islocal = scope > 1 ? false : true;
@@ -737,11 +728,20 @@ end:
 
 static void attr(rho_parser *ps) {
   /* TODO: how do i know in which var we can find attr from? */
-  emit(ps, ATTR);
   next(ps);
 }
 
-static void assign(rho_parser *ps) { next(ps); }
+static void varlist(rho_parser *ps) {
+}
+
+/* 
+  assign  := varlist = expr
+  varlist := ident [, varlist] 
+ */
+static void assign(rho_parser *ps) { 
+
+  next(ps);
+}
 
 static void peek(rho_parser *ps) { scan(ps, &ps->ahead); }
 
@@ -797,7 +797,30 @@ top:
   case '\r':
     goto top;
   case '/':
-    choose(t, p, '/', CUT, DIV);
+    switch (*p) {
+    case '/':
+      pp = ++p;
+      while (*p != '\n')
+        p++;
+      t->s.p = pp;
+      t->s.len = p - pp;
+      t->kind = CMT;
+      break;
+    case '*':
+      pp = ++p;
+      while (*p != '*' || *(p + 1) != '/') {
+        if (*p == '\n')
+          ps->line++;
+        p++;
+      }
+      p += 2;
+      t->s.p = pp;
+      t->s.len = p - pp;
+      t->kind = CMT;
+      break;
+    default:
+      t->kind = DIV;
+    }
     goto defer;
   case '*':
     choose(t, p, '*', POW, MUL);
@@ -971,7 +994,7 @@ rho_closure *rho_parse(rho_context *ctx, const char *src) {
   ps.ctx = ctx;
   ps.src = (byte *)src;
   ps.curp = ps.src;
-  ps.line = 0;
+  ps.line = 1;
   ps.n = 0;
   ps.p = p;
   ps.ahead.kind = -1;
