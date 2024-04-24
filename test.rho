@@ -1,4 +1,7 @@
 var a, b, c int
+d + 1
+
+
 
 
 // a, b = 1, 2

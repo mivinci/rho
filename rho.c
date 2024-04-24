@@ -555,7 +555,7 @@ static void stmt(rho_parser *ps) {
   }
 }
 
-static void pserror(rho_parser *ps, const char *s) {
+noreturn static void syntaxerror(rho_parser *ps, const char *s) {
   struct token *t;
   char *p, *end, *bp, b[64];
   int n, i;
@@ -584,7 +584,7 @@ static void pserror(rho_parser *ps, const char *s) {
   *bp++ = '\n';
   *bp++ = '\0';
   fprintf(stderr, b);
-  fprintf(stderr, "parse error: ");
+  fprintf(stderr, "syntax error: ");
   rho_panic(ps->ctx, s);
 }
 
@@ -599,7 +599,7 @@ static rho_type *arglist(rho_parser *ps, bool isconst) {
   for (i = 0; i < n; i++) {
     vp = ps->p->vars + i;
     if (rho_strcmp(&vp->name, &ps->t.s) == 0)
-      pserror(ps, "redundant variable declaration");
+      syntaxerror(ps, "redundant variable declaration");
   }
   v.idx = i;
   v.isconst = isconst;
@@ -616,7 +616,7 @@ static rho_type *arglist(rho_parser *ps, bool isconst) {
       if (rho_strcmp(&tp->name, &ps->t.s) == 0)
         return tp;
     }
-    rho_panic(ps->ctx, "parse error: undefined type at line %d", ps->line);
+    syntaxerror(ps, "undefined type");
   case COM:
     next(ps);
     tp = arglist(ps, isconst);
@@ -624,8 +624,7 @@ static rho_type *arglist(rho_parser *ps, bool isconst) {
       ps->p->vars[i].type = tp;
     return tp;
   default:
-    rho_panic(ps->ctx, "parse error: unexpected token %s at line %d",
-              TK[ps->t.kind], ps->line);
+    syntaxerror(ps, "unexpected token");
   }
 }
 
@@ -683,13 +682,11 @@ static void unexpr(rho_parser *ps) {
     expr(ps, 0);
     tk = ps->t.kind;
     if (tk != PARR)
-      rho_panic(ps->ctx, "syntax error: un-closed parentheses at line %d",
-                ps->line);
+      syntaxerror(ps, "un-closed parentheses");
     next(ps);
     return;
   default:
-    rho_panic(ps->ctx, "syntax error: unexpected token '%s' at line %d", TK[tk],
-              ps->line);
+    syntaxerror(ps, "unexpected token");
   }
 }
 
@@ -754,7 +751,7 @@ static void ident(rho_parser *ps) {
     }
     scope++;
   }
-  rho_panic(ps->ctx, "parse error: undefined variable at line %d", ps->line);
+  syntaxerror(ps, "undefined variable");
 
 end:
   v = *vp;
@@ -982,7 +979,7 @@ defer:
   ps->curp = p;
   return;
 err:
-  rho_panic(ps->ctx, "error: unexpected character '%c' at line %d", *(p - 1),
+  rho_panic(ps->ctx, "scan error: unexpected character '%c' at line %d", *(p - 1),
             ps->line);
 }
 
