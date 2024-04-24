@@ -6,14 +6,14 @@ idchain          ::=   ID   [ '.' ID ]+
 idlist           ::=   ID   [ ',' ID ]+
 exprlist         ::=   expr [ ',' expr ]+
 
-assign           ::=   idlist  [ op ] '=' exprlist
+assign           ::=   idlist  [ bop ] '=' exprlist
 index            ::=   idchain '[' expr ']'
 call             ::=   idchain '(' exprlist ')'
 incdec           ::=   idchain ( '++' | '--' )
 
-expr             ::=   uexpr  op  expr
+expr             ::=   uexpr  bop  expr
 uexpr            ::=   number       |
-                       assign       |
+                       ID           |
                        index        |
                        call         | 
                        'uop'  expr  | 
@@ -23,7 +23,7 @@ uexpr            ::=   number       |
                        switchexpr
 
 uop              ::=   '!'  | '~'
-op               ::=   '+'  | '-'  | '*'  | '/'  | '%'  | '**' | '&' |
+bop              ::=   '+'  | '-'  | '*'  | '/'  | '%'  | '**' | '&' |
                        '|'  | '^'  | '&&' | '||' | '<<' | '>>' | '<' |
                        '>'  | '<=' | '>=' | '==' | '!=' | '??'
 
@@ -40,12 +40,13 @@ stmt             ::=   vardecl    |
                        fndecl     |
                        structdecl |
                        ifacedecl  |
+                       assign     |
                        expr
 
-vardecl          ::=   'var'    arglist
-fndecl           ::=   'fn'     [ ID '.' ]  proto block
-structdecl       ::=   'struct' ID '{' [ arglist+ ] '}'
-ifacedecl        ::=   'iface'  ID '{' [ proto+ ] '}'
+vardecl          ::=   'var'        arglist
+fndecl           ::=   'fn'         [ ID '.' ]  proto block
+structdecl       ::=   'struct'     ID '{' [ arglist+ ] '}'
+ifacedecl        ::=   'interface'  ID '{' [ proto+ ] '}'
 
 proto            ::=   ID '(' [ arglistlist ] ')' arglistlist
 arglistlist      ::=   arglist [ ',' arglist ]+

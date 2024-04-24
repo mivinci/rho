@@ -3,7 +3,7 @@ AR     := ar
 CFLAGS := -Wall
 
 ifeq ($(OPT), 1)
-	CFLAGS += O2
+	CFLAGS += -O2
 endif
 
 ifeq ($(DEBUG), 1)
@@ -34,3 +34,6 @@ test_parse.out: test_parse.c rho.h librho.a
 
 test_load.out: test_load.c rho.h librho.a
 	$(CC) $(CFLAGS) -o $@ test_load.c -L. -lrho
+
+test_append.out: test_append.c rho.h librho.a
+	$(CC) $(CFLAGS) -o $@ test_append.c -L. -lrho

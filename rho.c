@@ -17,8 +17,8 @@
 #define bits32(x)  (32 - __builtin_clz(x))
 #define max2(a, b) ((a) > (b) ? (a) : (b))
 #define header(p)  ((rho_header *)((char *)(p) - sizeof(rho_header)))
-#define len(p)     ((p) ? (header(p)->size - header(p)->avail) / sizeof(*(p)) : 0)
-#define cap(p)     ((p) ? (header(p)->size / sizeof(*(p))) : 0)
+#define len(p)     rho_len(p)
+#define cap(p)     rho_cap(p)
 
 #define toint(p)     ((p)->u.i)
 #define tofloat(p)   ((p)->u.f)
@@ -70,16 +70,18 @@ enum Op {
   PSHC,
   PSHR,
   PSH,
+  POPR,
   POP,
   BOP,
+  UOP,
   CALL,
   RET,
   MAKE,
   ATTR,
 };
 
-static char *OP[] = {"nop", "pshc", "pshr", "psh",  "pop",
-                     "bop", "call", "ret",  "make", "attr"};
+static char *OP[] = {"nop", "pshc", "pshr", "psh", "popr", "pop",
+                     "bop", "uop",  "call", "ret", "make", "attr"};
 
 enum Tk {
   EOT, /* end of token */
@@ -96,6 +98,7 @@ enum Tk {
   REV, /* ~ */
   NOT, /* ! */
 
+  _bop,
   ADD, /* + */
   SUB, /* - */
   MUL, /* * */
@@ -115,6 +118,7 @@ enum Tk {
 
   EQ,  /* == */
   NEQ, /* != */
+  _bopend,
 
   ASS, /* = */
 
@@ -138,11 +142,12 @@ enum Tk {
 };
 
 static char *TK[] = {
-    "EOT",   "//",       "INT", "FLT", "STR",    "ID",    "++", "--",   "~",
-    "!",     "+",        "-",   "*",   "/",      "%",     "**", "&",    "|",
-    "^",     "&&",       "||",  "<<",  ">>",     "==",    "!=", "=",    "(",
-    ")",     ":",        ";",   ".",   ",",      "_kw",   "if", "else", "for",
-    "break", "continue", "var", "fn",  "struct", "_kwend"};
+    "EOT", "//", "INT",     "FLT",   "STR",  "ID",  "++",    "--",
+    "~",   "!",  "_bop",    "+",     "-",    "*",   "/",     "%",
+    "**",  "&",  "|",       "^",     "&&",   "||",  "<<",    ">>",
+    "==",  "!=", "_bopend", "=",     "(",    ")",   ":",     ";",
+    ".",   ",",  "_kw",     "if",    "else", "for", "break", "continue",
+    "var", "fn", "struct",  "_kwend"};
 
 static char *TG[] = {"int",      "float", "bool",    "pointer",
                      "c string", "proto", "c proto", "closure"};
@@ -180,6 +185,15 @@ static int precedence(int tk) {
   }
 }
 
+struct rho_header {
+  rho_header *next;
+  int refs;
+  int esize;
+  int size;
+  int avail;
+  void *ptr;
+};
+
 struct rho_runtime {
   struct list_head ctx;
   rho_header *free[PMAX];
@@ -194,14 +208,6 @@ struct rho_context {
   rho_ref *openrefs;
   rho_type *types;
   struct list_head link;
-};
-
-struct rho_header {
-  rho_header *next;
-  int refs;
-  int size;
-  int avail;
-  void *ptr;
 };
 
 struct rho_string {
@@ -219,7 +225,7 @@ struct rho_var {
   rho_type *type;
   rho_string name;
   int isconst : 1;
-  int islocal : 1;
+  int scope;
   int idx; /* index into proto::vars of the parent function if ::islocal,
               otherwise index into closure::refs of the parent function.  */
 };
@@ -278,11 +284,15 @@ static void ident(rho_parser *);
 static void stmt(rho_parser *);
 static void stmtlist(rho_parser *);
 static void vardecl(rho_parser *);
-static void unexpr(rho_parser *);
+static void assign(rho_parser *);
+static rho_type *arglist(rho_parser *, bool);
+static void uexpr(rho_parser *);
 static void expr(rho_parser *, int);
+static void exprlist(rho_parser *);
 static void scan(rho_parser *, struct token *);
 static void emit(rho_parser *, byte);
 static void traceback(rho_context *);
+static rho_var *findvar(rho_parser *, struct token *);
 static void closerefs(rho_context *, rho_value *);
 static rho_ref *findref(rho_context *, rho_value *);
 static rho_closure *makeclosure(rho_context *, rho_proto *, rho_ref **,
@@ -301,10 +311,11 @@ rho_runtime *rho_new(rho_allocator alloc) {
 
 static void inittypes(rho_context *ctx) {
   rho_type *tp;
-  int sz;
+  int usz, sz;
 
-  sz = 3 * sizeof(struct rho_type);
-  tp = rho_allocgc(ctx, sz);
+  usz = sizeof(struct rho_type);
+  sz = 3 * usz;
+  tp = rho_callocgc(ctx, 3, usz);
   memset(tp, 0, sz);
   tp[0].name.p = (byte *)TG[RHO_INT];
   tp[0].name.len = 3;
@@ -475,7 +486,7 @@ static rho_closure *makeclosure(rho_context *ctx, rho_proto *p, rho_ref **encp,
   cls->refs = (rho_ref **)(cls + 1);
   for (i = 0; i < nrefs; i++) {
     ref = p->refs + i;
-    if (ref->islocal)
+    if (ref->scope <= 1)
       cls->refs[i] = findref(ctx, arg + ref->idx);
     else
       cls->refs[i] = encp[ref->idx];
@@ -511,6 +522,39 @@ static void closerefs(rho_context *ctx, rho_value *arg) {
   }
 }
 
+noreturn static void syntaxerror(rho_parser *ps, const char *s) {
+  struct token *t;
+  char *p, *end, *bp, b[64];
+  int n, i;
+
+  t = &ps->t;
+  p = (char *)t->linep;
+  end = (char *)t->s.p + t->s.len + 16;
+  n = t->s.p - t->linep + 6;
+  bp = b;
+
+  bp += sprintf(bp, "%-2d |  ", t->line);
+  while (p != end && *p != '\n') {
+    bp += sprintf(bp, "%c", *p);
+    p++;
+  }
+  *bp++ = '\n';
+  for (i = 0; i < n; i++)
+    *bp++ = ' ';
+  *bp++ = '^';
+  for (i = 0; i < t->s.len - 1; i++)
+    *bp++ = '~';
+  *bp++ = '\n';
+  for (i = 0; i < n; i++)
+    *bp++ = ' ';
+  *bp++ = '|';
+  *bp++ = '\n';
+  *bp++ = '\0';
+  fprintf(stderr, b);
+  fprintf(stderr, "syntax error: ");
+  rho_panic(ps->ctx, s);
+}
+
 #define expect(ps, tk)                                                         \
   do {                                                                         \
     if (ps->t.kind != tk)                                                      \
@@ -528,7 +572,7 @@ static void stmtlist(rho_parser *ps) {
 }
 
 static void stmt(rho_parser *ps) {
-  Tk tk;
+  Tk tk, ah;
 
   tk = ps->t.kind;
   switch (tk) {
@@ -550,81 +594,17 @@ static void stmt(rho_parser *ps) {
   case STRT:
     /* TODO: struct declaration */
     return;
+  case ID:
+    /* TODO:  */
+    peek(ps);
+    ah = ps->ahead.kind;
+    if (ah == ASS || ah == COM) {
+      assign(ps);
+      return;
+    }
+    /* otherwise fall back to expr */
   default:
     expr(ps, 0); /* expression */
-  }
-}
-
-noreturn static void syntaxerror(rho_parser *ps, const char *s) {
-  struct token *t;
-  char *p, *end, *bp, b[64];
-  int n, i;
-
-  t = &ps->t;
-  p = (char *)t->linep;
-  end = (char *)t->s.p + t->s.len + 16;
-  n = t->s.p - t->linep + 6;
-  bp = b;
-
-  bp += sprintf(bp, "%-2d |  ", t->line);
-  while (p != end && *p != '\n') {
-    bp += sprintf(bp, "%c", *p);
-    p++;
-  }
-  *bp++ = '\n';
-  for (i = 0; i < n; i++)
-    *bp++ = ' ';
-  *bp++ = '^';
-  for (i = 0; i < t->s.len-1; i++)
-    *bp++ = '~';
-  *bp++ = '\n';
-  for (i = 0; i < n; i++)
-    *bp++ = ' ';
-  *bp++ = '|';
-  *bp++ = '\n';
-  *bp++ = '\0';
-  fprintf(stderr, b);
-  fprintf(stderr, "syntax error: ");
-  rho_panic(ps->ctx, s);
-}
-
-/* arglist := ID [ ',' ID ] type */
-static rho_type *arglist(rho_parser *ps, bool isconst) {
-  rho_var v, *vp, **vpp;
-  rho_type *tp;
-  int n, i;
-
-  expect(ps, ID);
-  n = len(ps->p->vars);
-  for (i = 0; i < n; i++) {
-    vp = ps->p->vars + i;
-    if (rho_strcmp(&vp->name, &ps->t.s) == 0)
-      syntaxerror(ps, "redundant variable declaration");
-  }
-  v.idx = i;
-  v.isconst = isconst;
-  v.name = ps->t.s;
-  vpp = &ps->p->vars;
-  *vpp = rho_append(ps->ctx, *vpp, &v, 1, rho_var);
-
-  next(ps);
-  switch (ps->t.kind) {
-  case ID:
-    n = len(ps->ctx->types);
-    for (i = 0; i < n; i++) {
-      tp = ps->ctx->types + i;
-      if (rho_strcmp(&tp->name, &ps->t.s) == 0)
-        return tp;
-    }
-    syntaxerror(ps, "undefined type");
-  case COM:
-    next(ps);
-    tp = arglist(ps, isconst);
-    if (tp)
-      ps->p->vars[i].type = tp;
-    return tp;
-  default:
-    syntaxerror(ps, "unexpected token");
   }
 }
 
@@ -636,6 +616,82 @@ static void vardecl(rho_parser *ps) {
   next(ps);
 }
 
+/* arglist := ID [ ',' ID ] type */
+static rho_type *arglist(rho_parser *ps, bool isconst) {
+  rho_var v, *vp, **vpp;
+  rho_type *tp;
+  int n, k, i;
+
+  expect(ps, ID);
+  n = len(ps->p->vars);
+  for (k = 0; k < n; k++) {
+    vp = ps->p->vars + k;
+    if (rho_strcmp(&vp->name, &ps->t.s) == 0)
+      syntaxerror(ps, "redundant variable declaration");
+  }
+  v.idx = k;
+  v.isconst = isconst;
+  v.name = ps->t.s;
+  v.scope = 0;
+  vpp = &ps->p->vars;
+  *vpp = rho_append(ps->ctx, *vpp, &v, 1, rho_var);
+
+  next(ps);
+  switch (ps->t.kind) {
+  case ID:
+    n = len(ps->ctx->types);
+    for (i = 0; i < n; i++) {
+      tp = ps->ctx->types + i;
+      if (rho_strcmp(&tp->name, &ps->t.s) == 0) {
+        // ((*vpp) + k)->type = tp;
+        return tp;
+      }
+    }
+    syntaxerror(ps, "undefined type");
+  case COM:
+    next(ps);
+    tp = arglist(ps, isconst);
+    if (tp)
+      // ((*vpp) + k)->type = tp;
+      return tp;
+  default:
+    syntaxerror(ps, "unexpected token");
+  }
+}
+
+/* assign := ID [ ',' ID ]+ [ bop ] '=' exprlist */
+static void assign(rho_parser *ps) {
+  rho_var *vp;
+
+  expect(ps, ID);
+  vp = findvar(ps, &ps->t);
+
+  next(ps);
+  switch (ps->t.kind) {
+  case ASS:
+    next(ps);
+    exprlist(ps);
+    goto end;
+  case COM:
+    next(ps);
+    assign(ps);
+    goto end;
+  default:
+    syntaxerror(ps, "unexpected token");
+  }
+end:
+  emit(ps, vp->scope == 0 ? POP : POPR);
+  emit(ps, vp->idx);
+}
+
+static void exprlist(rho_parser *ps) {
+  expr(ps, 0);
+  while (ps->t.kind == COM) {
+    next(ps);
+    expr(ps, 0);
+  }
+}
+
 /* Top-down expression parsing. */
 static void expr(rho_parser *ps, int plv) {
   Tk tk;
@@ -645,7 +701,7 @@ static void expr(rho_parser *ps, int plv) {
   if (tk == EOT)
     return;
 
-  unexpr(ps); /* left branch */
+  uexpr(ps); /* left branch */
   tk = ps->t.kind;
   lv = precedence(tk);
   while (tk && plv < lv) {
@@ -658,7 +714,7 @@ static void expr(rho_parser *ps, int plv) {
   }
 }
 
-static void unexpr(rho_parser *ps) {
+static void uexpr(rho_parser *ps) {
   Tk tk;
 
   tk = ps->t.kind;
@@ -675,6 +731,7 @@ static void unexpr(rho_parser *ps) {
   case REV:
     next(ps);
     expr(ps, 0);
+    emit(ps, UOP);
     emit(ps, tk);
     return;
   case PARL:
@@ -726,13 +783,11 @@ end:
   next(ps);
 }
 
-static void ident(rho_parser *ps) {
-  struct token *t;
+static rho_var *findvar(rho_parser *ps, struct token *t) {
   rho_var v, *vp, **vpp;
   rho_proto *p;
   int n, i, scope;
 
-  t = &ps->t;
   scope = 0;
   for (p = ps->p; p; p = p->prev) {
     vpp = &p->refs;
@@ -755,14 +810,20 @@ static void ident(rho_parser *ps) {
 
 end:
   v = *vp;
-  v.islocal = scope > 1 ? false : true;
-  if (scope == 0) {
-    emit(ps, PSH);
-  } else {
+  v.scope = scope;
+  if (scope > 0) {
     *vpp = rho_append(ps->ctx, *vpp, &v, 1, rho_var);
-    emit(ps, PSHR);
+    vp = (*vpp) + (len(*vpp) - 1);
   }
-  emit(ps, v.idx);
+  return vp;
+}
+
+static void ident(rho_parser *ps) {
+  rho_var *vp;
+
+  vp = findvar(ps, &ps->t);
+  emit(ps, vp->scope == 0 ? PSH : PSHR);
+  emit(ps, vp->idx);
   next(ps);
 }
 
@@ -777,7 +838,7 @@ static void next(rho_parser *ps) {
   ps->ahead.kind = -1;
 }
 
-void kw(struct token *t) {
+static void kw(struct token *t) {
   int i;
 
   if (t->s.len < 2)
@@ -979,8 +1040,8 @@ defer:
   ps->curp = p;
   return;
 err:
-  rho_panic(ps->ctx, "scan error: unexpected character '%c' at line %d", *(p - 1),
-            ps->line);
+  rho_panic(ps->ctx, "scan error: unexpected character '%c' at line %d",
+            *(p - 1), ps->line);
 }
 
 static void emit(rho_parser *ps, byte c) {
@@ -999,17 +1060,29 @@ static void emit(rho_parser *ps, byte c) {
   } else {
     printf("0x%02X  ", c);
     switch (ps->op) {
+    case UOP:
     case BOP:
-      printf("%s", TK[c]);
+      printf("%-5d (%s)", c, TK[c]);
       break;
     case RET:
       printf("%d", (int)c);
       break;
     case PSHC:
+      printf("%-5d (", (int)c);
       rho_printv(ps->ctx, ps->p->consts + c, 0);
+      printf(")");
+      break;
+    case PSHR:
+    case POPR:
+      printf("%-5d (", (int)c);
+      vp = ps->p->refs + c;
+      for (i = 0; i < vp->name.len; i++)
+        putc(vp->name.p[i], stdout);
+      printf(")");
       break;
     case PSH:
-      printf("%-4d (", (int)c);
+    case POP:
+      printf("%-5d (", (int)c);
       vp = ps->p->vars + c;
       for (i = 0; i < vp->name.len; i++)
         putc(vp->name.p[i], stdout);
@@ -1134,6 +1207,7 @@ void *rho_allocgc(rho_context *ctx, int size) {
     if (!(h = r->alloc(0, size + sizeof(*h))))
       rho_panic(ctx, "runtime error: out of memory");
     memset(h, 0, sizeof(*h));
+    h->esize = size;
     h->size = size;
     h->avail = h->size;
     h->ptr = (void *)(h + 1);
@@ -1142,9 +1216,18 @@ void *rho_allocgc(rho_context *ctx, int size) {
   }
   h->refs = 0;
   h->avail = h->size;
+  h->esize = h->size;
   r->free[bits] = h->next;
   rho_unlock(ctx);
   return h->ptr;
+}
+
+void *rho_callocgc(rho_context *ctx, int n, int usz) {
+  void *p;
+
+  p = rho_allocgc(ctx, n * usz);
+  header(p)->esize = usz;
+  return p;
 }
 
 void rho_freegc(rho_context *ctx, void *ptr) {
@@ -1180,8 +1263,9 @@ void *rho_reallocgc(rho_context *ctx, void *ptr, int newsz) {
     return h->ptr;
   }
   newh = header(rho_allocgc(ctx, newsz));
+  newh->esize = h->esize;
   memcpy(newh->ptr, h->ptr, h->size);
-  newh->avail -= h->size;
+  newh->avail -= (h->size - h->avail);
   rho_freegc(ctx, h->ptr);
   return newh->ptr;
 }
@@ -1190,10 +1274,11 @@ void *rho_appendgc(rho_context *ctx, void *dst, void *src, int n, int usz) {
   rho_header *h;
   int newsz, ncopy;
 
-  ncopy = n * usz;
   if (!dst)
-    dst = rho_allocgc(ctx, ncopy);
+    dst = rho_callocgc(ctx, n, usz);
+
   h = header(dst);
+  ncopy = n * usz;
   if (h->avail < ncopy) {
     newsz = max2(h->size * 3 / 2, h->size + ncopy);
     dst = rho_reallocgc(ctx, dst, newsz);
@@ -1250,66 +1335,20 @@ int rho_strcmp(rho_string *s, rho_string *t) {
   return n == 0 ? strncmp((const char *)s->p, (const char *)t->p, t->len) : n;
 }
 
-// int main(int argc, char **argv) {
-//   rho_parser ps;
-//   rho_runtime *R;
-//   rho_context *c0;
-//   rho_value v;
-//   // int n, i;
-//   // Tk tk;
-//   // char buf[32];
+int rho_cap(void *p) {
+  rho_header *h;
 
-//   R = rho_new(__alloc);
-//   c0 = rho_open(R, 4096);
+  if (!p)
+    return 0;
+  h = header(p);
+  return h->size / h->esize;
+}
 
-//   rho_proto p;
-//   memset(&p, 0, sizeof p);
-//   ps.ctx = c0;
-//   ps.p = &p;
-//   ps.line = 0;
-//   ps.src = (byte *)argv[1];
-//   // ps.src = (byte *)"3.0/2";
-//   ps.curp = ps.src;
-//   ps.ctx = c0;
-//   ps.n = 0;
+int rho_len(void *p) {
+  rho_header *h;
 
-//   next(&ps);
-//   expr(&ps, 0);
-
-//   emit(&ps, RET);
-//   emit(&ps, 1);
-
-//   // if (!ps.debug) {
-//   //   for (i = 0; i < ps.n; i++) {
-//   //     printf("0x%02X\n", p.code[i]);
-//   //   }
-//   // }
-//   rho_pushclosure(c0, makeclosure(c0, &p, 0, 0));
-//   rho_call(c0, 0);
-//   v = rho_pop(c0);
-//   rho_printv(c0, &v);
-//   exit(0);
-//   // printf("%d %d\n", (int)ps.p->code[0], (int)ps.p->code[1]);
-//   // printf("%ld\n", ps.p->consts[0].u.i);
-
-//   // for (;;) {
-//   //   next(&ps);
-//   //   tk = ps.t.kind;
-//   //   switch (tk) {
-//   //   case EOT:
-//   //     exit(0);
-//   //   case INT:
-//   //   case FLT:
-//   //   case ID:
-//   //   case STR:
-//   //     printf("%s  (", TK[tk]);
-//   //     memccpy(buf, ps.t.p, 1, ps.t.len);
-//   //     buf[ps.t.len] = '\0';
-//   //     printf("%s", buf);
-//   //     printf(")\n");
-//   //     break;
-//   //   default:
-//   //     printf("%s\n", TK[tk]);
-//   //   }
-//   // }
-// }
+  if (!p)
+    return 0;
+  h = header(p);
+  return (h->size - h->avail) / h->esize;
+}

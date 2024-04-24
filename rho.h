@@ -99,8 +99,11 @@ rho_value rho_pop(rho_context *);
 rho_value rho_cast(rho_context *, rho_value *, int);
 int rho_printv(rho_context *, rho_value *, char);
 void *rho_allocgc(rho_context *, int);
+void *rho_callocgc(rho_context *, int, int);
 void rho_freegc(rho_context *, void *);
 void *rho_appendgc(rho_context *, void *, void *, int, int);
+int rho_cap(void *);
+int rho_len(void *);
 int rho_strcmp(rho_string *, rho_string *);
 
 #ifdef __cplusplus
