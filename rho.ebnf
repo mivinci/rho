@@ -25,7 +25,7 @@ uexpr            ::=   number       |
 uop              ::=   '!'  | '~'
 op               ::=   '+'  | '-'  | '*'  | '/'  | '%'  | '**' | '&' |
                        '|'  | '^'  | '&&' | '||' | '<<' | '>>' | '<' |
-                       '>'  | '<=' | '>=' | '==' | '!='
+                       '>'  | '<=' | '>=' | '==' | '!=' | '??'
 
 ifexpr           ::=   'if' expr block [ 'else' block ]
 forexpr          ::=   cforexpr | iteration
@@ -42,13 +42,13 @@ stmt             ::=   vardecl    |
                        ifacedecl  |
                        expr
 
-vardecl          ::=   'var'    idlisttype
+vardecl          ::=   'var'    arglist
 fndecl           ::=   'fn'     [ ID '.' ]  proto block
-structdecl       ::=   'struct' ID '{' [ idlisttype+ ] '}'
+structdecl       ::=   'struct' ID '{' [ arglist+ ] '}'
 ifacedecl        ::=   'iface'  ID '{' [ proto+ ] '}'
 
-proto            ::=   ID '(' [ idlisttypelist ] ')' idlisttypelist
-idlisttypelist   ::=   idlisttype [ ',' idlisttype ]+
-idlisttype       ::=   idlist type
+proto            ::=   ID '(' [ arglistlist ] ')' arglistlist
+arglistlist      ::=   arglist [ ',' arglist ]+
+arglist          ::=   idlist type
 
 type             ::=   'int' | 'float' | 'bool' | ID

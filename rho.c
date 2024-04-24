@@ -250,6 +250,8 @@ struct rho_closure {
 struct token {
   int kind;
   int iskw : 1;
+  int line;
+  byte *linep;
   rho_string s;
 };
 
@@ -261,6 +263,7 @@ struct rho_parser {
   struct token ahead;
   byte *src;
   byte *curp;
+  byte *linep;
   int line;
   /* Members below are for debug only. */
   int n;
@@ -272,11 +275,9 @@ static void next(rho_parser *);
 static void peek(rho_parser *);
 static void number(rho_parser *);
 static void ident(rho_parser *);
-static void attr(rho_parser *);
-static void assign(rho_parser *);
 static void stmt(rho_parser *);
 static void stmtlist(rho_parser *);
-static void variable(rho_parser *);
+static void vardecl(rho_parser *);
 static void unexpr(rho_parser *);
 static void expr(rho_parser *, int);
 static void scan(rho_parser *, struct token *);
@@ -541,9 +542,7 @@ static void stmt(rho_parser *ps) {
     /* TODO: for statement */
     return;
   case VAR:
-    next(ps);
-    expect(ps, ID);
-    variable(ps);
+    vardecl(ps);
     return;
   case FN:
     /* TODO: function declaration*/
@@ -556,36 +555,85 @@ static void stmt(rho_parser *ps) {
   }
 }
 
-static void variable(rho_parser *ps) {
+static void pserror(rho_parser *ps, const char *s) {
+  struct token *t;
+  char *p, *end, *bp, b[64];
+  int n, i;
+
+  t = &ps->t;
+  p = (char *)t->linep;
+  end = (char *)t->s.p + t->s.len + 16;
+  n = t->s.p - t->linep + 6;
+  bp = b;
+
+  bp += sprintf(bp, "%-2d |  ", t->line);
+  while (p != end && *p != '\n') {
+    bp += sprintf(bp, "%c", *p);
+    p++;
+  }
+  *bp++ = '\n';
+  for (i = 0; i < n; i++)
+    *bp++ = ' ';
+  *bp++ = '^';
+  for (i = 0; i < t->s.len-1; i++)
+    *bp++ = '~';
+  *bp++ = '\n';
+  for (i = 0; i < n; i++)
+    *bp++ = ' ';
+  *bp++ = '|';
+  *bp++ = '\n';
+  *bp++ = '\0';
+  fprintf(stderr, b);
+  fprintf(stderr, "parse error: ");
+  rho_panic(ps->ctx, s);
+}
+
+/* arglist := ID [ ',' ID ] type */
+static rho_type *arglist(rho_parser *ps, bool isconst) {
   rho_var v, *vp, **vpp;
   rho_type *tp;
   int n, i;
 
+  expect(ps, ID);
   n = len(ps->p->vars);
   for (i = 0; i < n; i++) {
     vp = ps->p->vars + i;
     if (rho_strcmp(&vp->name, &ps->t.s) == 0)
-      rho_panic(ps->ctx,
-                "parse error: redundant variable declaration at line %d",
-                ps->line);
+      pserror(ps, "redundant variable declaration");
   }
   v.idx = i;
-  v.isconst = false;
+  v.isconst = isconst;
   v.name = ps->t.s;
-
-  next(ps);
-  n = len(ps->ctx->types);
-  for (i = 0; i < n; i++) {
-    tp = ps->ctx->types + i;
-    if (rho_strcmp(&tp->name, &ps->t.s) == 0)
-      goto end;
-  }
-  rho_panic(ps->ctx, "parse error: undefined type at line %d", ps->line);
-
-end:
-  v.type = tp;
   vpp = &ps->p->vars;
   *vpp = rho_append(ps->ctx, *vpp, &v, 1, rho_var);
+
+  next(ps);
+  switch (ps->t.kind) {
+  case ID:
+    n = len(ps->ctx->types);
+    for (i = 0; i < n; i++) {
+      tp = ps->ctx->types + i;
+      if (rho_strcmp(&tp->name, &ps->t.s) == 0)
+        return tp;
+    }
+    rho_panic(ps->ctx, "parse error: undefined type at line %d", ps->line);
+  case COM:
+    next(ps);
+    tp = arglist(ps, isconst);
+    if (tp)
+      ps->p->vars[i].type = tp;
+    return tp;
+  default:
+    rho_panic(ps->ctx, "parse error: unexpected token %s at line %d",
+              TK[ps->t.kind], ps->line);
+  }
+}
+
+/* vardecl := 'var' arglist */
+static void vardecl(rho_parser *ps) {
+  expect(ps, VAR);
+  next(ps);
+  arglist(ps, false);
   next(ps);
 }
 
@@ -612,7 +660,7 @@ static void expr(rho_parser *ps, int plv) {
 }
 
 static void unexpr(rho_parser *ps) {
-  Tk tk, ah;
+  Tk tk;
 
   tk = ps->t.kind;
   switch (tk) {
@@ -622,7 +670,7 @@ static void unexpr(rho_parser *ps) {
     return;
   case ID:
     /* TODO */
-    next(ps);
+    ident(ps);
     return;
   case NOT:
   case REV:
@@ -721,23 +769,6 @@ end:
   next(ps);
 }
 
-static void attr(rho_parser *ps) {
-  /* TODO: how do i know in which var we can find attr from? */
-  next(ps);
-}
-
-static void varlist(rho_parser *ps) {
-}
-
-/* 
-  assign  := varlist = expr
-  varlist := ident [, varlist] 
- */
-static void assign(rho_parser *ps) { 
-
-  next(ps);
-}
-
 static void peek(rho_parser *ps) { scan(ps, &ps->ahead); }
 
 static void next(rho_parser *ps) {
@@ -763,7 +794,7 @@ void kw(struct token *t) {
   }
 }
 
-#define choose(t, p, c, t1, t2)                                                \
+#define choose(ps, t, p, c, t1, t2)                                            \
   do {                                                                         \
     if (*(p) != c)                                                             \
       (t)->kind = t2;                                                          \
@@ -771,6 +802,8 @@ void kw(struct token *t) {
       (t)->kind = t1;                                                          \
       (p)++;                                                                   \
     }                                                                          \
+    (t)->linep = (ps)->linep;                                                  \
+    (t)->line = (ps)->line;                                                    \
   } while (0)
 
 static void scan(rho_parser *ps, struct token *t) {
@@ -786,6 +819,7 @@ top:
     goto defer;
   case '\n':
     ps->line++;
+    ps->linep = p;
     goto top;
   case ' ':
   case '\t':
@@ -799,6 +833,8 @@ top:
         p++;
       t->s.p = pp;
       t->s.len = p - pp;
+      t->linep = ps->linep;
+      t->line = ps->line;
       t->kind = CMT;
       break;
     case '*':
@@ -811,71 +847,95 @@ top:
       p += 2;
       t->s.p = pp;
       t->s.len = p - pp;
+      t->linep = ps->linep;
+      t->line = ps->line;
       t->kind = CMT;
       break;
     default:
       t->kind = DIV;
+      t->linep = ps->linep;
+      t->line = ps->line;
     }
     goto defer;
   case '*':
-    choose(t, p, '*', POW, MUL);
+    choose(ps, t, p, '*', POW, MUL);
     goto defer;
   case '-':
-    choose(t, p, '-', DEC, SUB);
+    choose(ps, t, p, '-', DEC, SUB);
     goto defer;
   case '+':
-    choose(t, p, '+', INC, ADD);
+    choose(ps, t, p, '+', INC, ADD);
     goto defer;
   case '%':
     t->kind = MOD;
     goto defer;
   case '&':
-    choose(t, p, '&', LAND, AND);
+    choose(ps, t, p, '&', LAND, AND);
     goto defer;
   case '|':
-    choose(t, p, '|', LOR, OR);
+    choose(ps, t, p, '|', LOR, OR);
     goto defer;
   case '<':
     if (*p != '<')
       goto err;
     p++;
     t->kind = SHL;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case '>':
     if (*p != '>')
       goto err;
     p++;
     t->kind = SHR;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case '^':
     t->kind = XOR;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case '~':
     t->kind = REV;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case '!':
-    choose(t, p, '=', NEQ, NOT);
+    choose(ps, t, p, '=', NEQ, NOT);
     goto defer;
   case '=':
-    choose(t, p, '=', EQ, ASS);
+    choose(ps, t, p, '=', EQ, ASS);
     goto defer;
   case '(':
     t->kind = PARL;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case ')':
     t->kind = PARR;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case ':':
     t->kind = COL;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case ';':
     t->kind = SEM;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case '.':
     t->kind = DOT;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case ',':
     t->kind = COM;
+    t->linep = ps->linep;
+    t->line = ps->line;
     goto defer;
   case '"':
     pp = p;
@@ -883,6 +943,8 @@ top:
       p++;
     t->s.p = pp;
     t->s.len = p - pp;
+    t->linep = ps->linep;
+    t->line = ps->line;
     t->kind = STR;
     p++;
     goto defer;
@@ -897,6 +959,8 @@ top:
       }
       t->s.p = pp;
       t->s.len = p - pp;
+      t->linep = ps->linep;
+      t->line = ps->line;
       t->kind = tk;
       goto defer;
     }
@@ -906,6 +970,8 @@ top:
         p++;
       t->s.p = pp;
       t->s.len = p - pp;
+      t->linep = ps->linep;
+      t->line = ps->line;
       t->kind = ID;
       kw(t);
       goto defer;
@@ -989,6 +1055,7 @@ rho_closure *rho_parse(rho_context *ctx, const char *src) {
   ps.ctx = ctx;
   ps.src = (byte *)src;
   ps.curp = ps.src;
+  ps.linep = ps.src;
   ps.line = 1;
   ps.n = 0;
   ps.p = p;

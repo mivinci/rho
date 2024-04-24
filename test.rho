@@ -1,11 +1,13 @@
-var a int
-a, b = 1, 2
-a + 1
-// pshc 0 (1)
-// pshc 1 (2)
-// pop  1 (b)
-// pop  0 (a)
-// psh  0 (a)
-// psh  0 (a)
-// pshc 0 (1)
-// bop    (+)
+var a, b, c int
+
+
+// a, b = 1, 2
+// a + 1
+// pshc  0  (1)
+// pshc  1  (2)
+// pop   1  (b)
+// pop   0  (a)
+// psh   0  (a)
+// psh   0  (a)
+// pshc  0  (1)
+// bop   10 (+)
