@@ -619,11 +619,6 @@ static void unexpr(rho_parser *ps) {
   case INT:
   case FLT:
     number(ps);
-    tk = ps->t.kind;
-    if (tk == INC || tk == DEC) {
-      emit(ps, tk);
-      next(ps);
-    }
     return;
   case ID:
     /* TODO */

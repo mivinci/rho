@@ -1,0 +1,54 @@
+# Rho Grammar
+
+program          ::=   stmtlist
+
+idchain          ::=   ID   [ '.' ID ]+
+idlist           ::=   ID   [ ',' ID ]+
+exprlist         ::=   expr [ ',' expr ]+
+
+assign           ::=   idlist  [ op ] '=' exprlist
+index            ::=   idchain '[' expr ']'
+call             ::=   idchain '(' exprlist ')'
+incdec           ::=   idchain ( '++' | '--' )
+
+expr             ::=   uexpr  op  expr
+uexpr            ::=   number       |
+                       assign       |
+                       index        |
+                       call         | 
+                       'uop'  expr  | 
+                       '(' expr ')' |
+                       ifexpr       |
+                       forexpr      |
+                       switchexpr
+
+uop              ::=   '!'  | '~'
+op               ::=   '+'  | '-'  | '*'  | '/'  | '%'  | '**' | '&' |
+                       '|'  | '^'  | '&&' | '||' | '<<' | '>>' | '<' |
+                       '>'  | '<=' | '>=' | '==' | '!='
+
+ifexpr           ::=   'if' expr block [ 'else' block ]
+forexpr          ::=   cforexpr | iteration
+switchexpr       ::=   'switch' expr '{' caselist '}'
+caselist         ::=   ( 'default' ':' block ) | [ 'case' expr ':' block ]+
+cforexpr         ::=   'for' assign ';' expr ';' expr block
+iteration        ::=   # TODO
+
+block            ::=   '{' stmtlist '}'
+stmtlist         ::=   stmt+      EOT
+stmt             ::=   vardecl    |
+                       fndecl     |
+                       structdecl |
+                       ifacedecl  |
+                       expr
+
+vardecl          ::=   'var'    idlisttype
+fndecl           ::=   'fn'     [ ID '.' ]  proto block
+structdecl       ::=   'struct' ID '{' [ idlisttype+ ] '}'
+ifacedecl        ::=   'iface'  ID '{' [ proto+ ] '}'
+
+proto            ::=   ID '(' [ idlisttypelist ] ')' idlisttypelist
+idlisttypelist   ::=   idlisttype [ ',' idlisttype ]+
+idlisttype       ::=   idlist type
+
+type             ::=   'int' | 'float' | 'bool' | ID
