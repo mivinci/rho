@@ -59,12 +59,6 @@ typedef unsigned char byte;
 typedef enum Op Op;
 typedef enum Tk Tk;
 
-#ifdef RHO_DEBUG
-static int debug = 1;
-#else
-static int debug = 0;
-#endif
-
 enum Op {
   NOP,
   PSHC,
@@ -278,7 +272,6 @@ struct rho_parser {
   byte *linep;
   int line;
   /* Members below are for debug only. */
-  int n;
   byte op;
 };
 
@@ -287,8 +280,9 @@ static void next(rho_parser *);
 static void peek(rho_parser *);
 static void number(rho_parser *);
 static void ident(rho_parser *);
+// static void block(rho_parser *);
 static void stmt(rho_parser *);
-static void stmtlist(rho_parser *);
+static void stmtlist(rho_parser *, Tk);
 static void vardecl(rho_parser *);
 static void assign(rho_parser *);
 static rho_type *arglist(rho_parser *, bool);
@@ -589,13 +583,14 @@ noreturn static void syntaxerror(rho_parser *ps, const char *s) {
                 ps->line);                                                     \
   } while (0)
 
-static void stmtlist(rho_parser *ps) {
+static void stmtlist(rho_parser *ps, Tk end) {
   Tk tk;
 
-  while ((tk = ps->t.kind) != EOT)
+  tk = ps->t.kind;
+  while (tk != end && tk != EOT) {
     stmt(ps);
-  emit(ps, RET);
-  emit(ps, 1);
+    tk = ps->t.kind;
+  }
 }
 
 static void stmt(rho_parser *ps) {
@@ -629,18 +624,21 @@ static void stmt(rho_parser *ps) {
   }
 }
 
+// static void block(rho_parser *ps) {}
+
+/* ifexpr := 'if' expr block [ 'else' block ] */
 static void ifexpr(rho_parser *ps) {
   int a, off;
 
   expect(ps, IF);
   next(ps);
   expr(ps, 0); /* s1 */
-  emit(ps, JZ);
-  emit(ps, NOP);
   expect(ps, BRCL);
   next(ps);
+  emit(ps, JZ);
+  emit(ps, NOP);
   a = len(ps->p->code);
-  stmt(ps); /* s2 */
+  stmtlist(ps, BRCR); /* s2 */
   off = len(ps->p->code) - a;
   ps->p->code[a - 1] = off;
   expect(ps, BRCR);
@@ -649,10 +647,10 @@ static void ifexpr(rho_parser *ps) {
     next(ps);
     expect(ps, BRCL);
     next(ps);
-    a = len(ps->p->code);
     emit(ps, J);
     emit(ps, NOP);
-    stmt(ps); /* s3 */
+    a = len(ps->p->code);
+    stmtlist(ps, BRCR); /* s3 */
     off = len(ps->p->code) - a;
     ps->p->code[a - 1] = off;
     expect(ps, BRCR);
@@ -797,7 +795,7 @@ static void uexpr(rho_parser *ps) {
     expr(ps, 0);
     tk = ps->t.kind;
     if (tk != PARR)
-      syntaxerror(ps, "un-closed parentheses");
+      syntaxerror(ps, "open parentheses");
     next(ps);
     return;
   default:
@@ -1113,52 +1111,61 @@ err:
 }
 
 static void emit(rho_parser *ps, byte c) {
-  rho_var *vp;
   byte **pp;
-  int n, i;
 
   pp = &ps->p->code;
-  n = ++ps->n;
-  *pp = rho_appendgc(ps->ctx, *pp, &c, 1, 1);
-  if (!debug)
-    return;
-  if (n % 2) {
-    ps->op = c;
-    printf("0x%02X  %s\n", c, OP[c]);
-  } else {
-    printf("0x%02X  ", c);
-    switch (ps->op) {
+  *pp = rho_append(ps->ctx, *pp, &c, 1, byte);
+}
+
+int rho_dump(rho_context *ctx, rho_closure *cls, FILE *fp) {
+  rho_var *vp;
+  byte op, a, *p;
+  int n, i, k;
+
+  p = cls->p->code;
+  n = len(p);
+  for (k = 0; k < n; k += 2) {
+    op = p[k];
+    a = p[k + 1];
+    fprintf(fp, "0x%02X  %s\n", op, OP[op]);
+    fprintf(fp, "0x%02X  ", a);
+    switch (op) {
     case UOP:
     case BOP:
-      printf("%-5d (%s)", c, TK[c]);
+      fprintf(fp, "%-5d (%s)", a, TK[a]);
       break;
     case RET:
-      printf("%d", (int)c);
+      fprintf(fp, "%d", (int)a);
       break;
     case PSHC:
-      printf("%-5d (", (int)c);
-      rho_printv(ps->ctx, ps->p->consts + c, 0);
-      printf(")");
+      fprintf(fp, "%-5d (", (int)a);
+      rho_printv(ctx, cls->p->consts + a, 0);
+      fprintf(fp, ")");
       break;
     case PSHR:
     case POPR:
-      printf("%-5d (", (int)c);
-      vp = ps->p->refs + c;
+      fprintf(fp, "%-5d (", (int)a);
+      vp = cls->p->refs + a;
       for (i = 0; i < vp->name.len; i++)
-        putc(vp->name.p[i], stdout);
-      printf(")");
+        putc(vp->name.p[i], fp);
+      fprintf(fp, ")");
       break;
     case PSH:
     case POP:
-      printf("%-5d (", (int)c);
-      vp = ps->p->vars + c;
+      fprintf(fp, "%-5d (", (int)a);
+      vp = cls->p->vars + a;
       for (i = 0; i < vp->name.len; i++)
-        putc(vp->name.p[i], stdout);
-      printf(")");
+        putc(vp->name.p[i], fp);
+      fprintf(fp, ")");
+      break;
+    case J:
+    case JZ:
+      fprintf(fp, "%-5d", a);
       break;
     }
-    putc('\n', stdout);
+    putc('\n', fp);
   }
+  return 0;
 }
 
 rho_closure *rho_load(rho_context *ctx, const char *path) {
@@ -1195,12 +1202,13 @@ rho_closure *rho_parse(rho_context *ctx, const char *src) {
   ps.curp = ps.src;
   ps.linep = ps.src;
   ps.line = 1;
-  ps.n = 0;
   ps.p = p;
   ps.ahead.kind = -1;
 
   next(&ps);
-  stmtlist(&ps);
+  stmtlist(&ps, EOF);
+  emit(&ps, RET);
+  emit(&ps, 1);
   return cls;
 }
 
@@ -1348,7 +1356,7 @@ void *rho_appendgc(rho_context *ctx, void *dst, void *src, int n, int usz) {
   h = header(dst);
   ncopy = n * usz;
   if (h->avail < ncopy) {
-    newsz = max2(h->size * 3 / 2, h->size + ncopy);
+    newsz = max2(h->size * 2, h->size + ncopy);
     dst = rho_reallocgc(ctx, dst, newsz);
   }
   /* we have to re-retrieve the header in case of a reallocgc. */
@@ -1419,9 +1427,4 @@ int rho_len(void *p) {
     return 0;
   h = header(p);
   return (h->size - h->avail) / h->esize;
-}
-
-int rho_dump(rho_context *ctx, rho_closure *cls) {
-  /* TODO */
-  return 0;
 }

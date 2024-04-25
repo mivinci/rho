@@ -91,7 +91,7 @@ rho_context *rho_open(rho_runtime *, int);
 void rho_close(rho_context *);
 rho_closure *rho_load(rho_context *, const char *);
 rho_closure *rho_parse(rho_context *, const char *);
-int rho_dump(rho_context *, rho_closure *);
+int rho_dump(rho_context *, rho_closure *, FILE *);
 int rho_call(rho_context *, int);
 void rho_panic(rho_context *, const char *, ...);
 bool rho_eq(rho_context *, rho_value *, rho_value *);
