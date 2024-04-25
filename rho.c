@@ -43,6 +43,21 @@
     }                                                                          \
   } while (0)
 
+#define binop_cmp(ctx, op, sp)                                                 \
+  do {                                                                         \
+    rho_value *p = (sp)--;                                                     \
+    switch (tag(sp)) {                                                         \
+    case RHO_INT:                                                              \
+      toint(sp) = toint(sp) op rho_toint(rho_cast(ctx, p, RHO_INT));           \
+      break;                                                                   \
+    case RHO_FLOAT:                                                            \
+      tofloat(sp) = tofloat(sp) op rho_tofloat(rho_cast(ctx, p, RHO_FLOAT));   \
+      break;                                                                   \
+    default:                                                                   \
+      rho_panic(ctx, "runtime error: invalid operand(s)");                     \
+    }                                                                          \
+  } while (0)
+
 #define binop_bit(ctx, op, sp)                                                 \
   do {                                                                         \
     rho_value *p = (sp)--;                                                     \
@@ -71,13 +86,15 @@ enum Op {
   CALL,
   RET,
   J,
+  JB,
   JZ,
   MAKE,
   ATTR,
 };
 
-static char *OP[] = {"nop", "pshc", "pshr", "psh", "popr", "pop",  "bop",
-                     "uop", "call", "ret",  "j",   "jz",   "make", "attr"};
+static char *OP[] = {"nop", "pshc", "pshr", "psh",  "popr",
+                     "pop", "bop",  "uop",  "call", "ret",
+                     "j",   "jb",   "jz",   "make", "attr"};
 
 enum Tk {
   EOT, /* end of token */
@@ -93,6 +110,7 @@ enum Tk {
 
   REV, /* ~ */
   NOT, /* ! */
+  AT,  /* @ */
 
   _bop,
   ADD, /* + */
@@ -114,6 +132,10 @@ enum Tk {
 
   EQ,  /* == */
   NEQ, /* != */
+  LSS, /* < */
+  LEQ, /* <= */
+  GRT, /* > */
+  GEQ, /* >= */
   _bopend,
 
   ASS, /* = */
@@ -134,7 +156,7 @@ enum Tk {
   ELSE, /* else*/
   FOR,  /* for */
   BRK,  /* break */
-  CTN,
+  CTN,  /* continue */
   VAR,  /* var */
   FN,   /* fn */
   STRT, /* struct */
@@ -142,12 +164,13 @@ enum Tk {
 };
 
 static char *TK[] = {
-    "EOT",  "//",  "INT",     "FLT",      "STR", "ID", "++",     "--",
-    "~",    "!",   "_bop",    "+",        "-",   "*",  "/",      "%",
-    "**",   "&",   "|",       "^",        "&&",  "||", "<<",     ">>",
-    "==",   "!=",  "_bopend", "=",        "(",   ")",  "[",      "]",
-    "{",    "}",   ":",       ";",        ".",   ",",  "_kw",    "if",
-    "else", "for", "break",   "continue", "var", "fn", "struct", "_kwend"};
+    "EOT",      "//",  "INT", "FLT",    "STR",   "ID",   "++",  "--",
+    "~",        "!",   "@",   "_bop",   "+",     "-",    "*",   "/",
+    "%",        "**",  "&",   "|",      "^",     "&&",   "||",  "<<",
+    ">>",       "==",  "!=",  "<",      "<=",    ">",    ">=",  "_bopend",
+    "=",        "(",   ")",   "[",      "]",     "{",    "}",   ":",
+    ";",        ".",   ",",   "_kw",    "if",    "else", "for", "break",
+    "continue", "var", "fn",  "struct", "_kwend"};
 
 static char *TG[] = {"int",      "float", "bool",    "pointer",
                      "c string", "proto", "c proto", "closure"};
@@ -175,6 +198,11 @@ static int precedence(int tk) {
   case SHL:
   case SHR:
     return 10;
+  case LSS:
+  case LEQ:
+  case GRT:
+  case GEQ:
+    return 9;
   case EQ:
   case NEQ:
     return 8;
@@ -279,7 +307,7 @@ static int precedence(int);
 static void next(rho_parser *);
 static void peek(rho_parser *);
 static void number(rho_parser *);
-static void ident(rho_parser *);
+static int ident(rho_parser *);
 // static void block(rho_parser *);
 static void stmt(rho_parser *);
 static void stmtlist(rho_parser *, Tk);
@@ -290,6 +318,7 @@ static void uexpr(rho_parser *);
 static void expr(rho_parser *, int);
 static void exprlist(rho_parser *);
 static void ifexpr(rho_parser *);
+static void forexpr(rho_parser *);
 static void scan(rho_parser *, struct token *);
 static void emit(rho_parser *, byte);
 static void traceback(rho_context *);
@@ -462,6 +491,24 @@ int rho_call(rho_context *ctx, int n) {
       case SHR:
         binop_bit(ctx, >>, sp);
         break;
+      case EQ:
+        binop_cmp(ctx, >=, sp);
+        break;
+      case NEQ:
+        binop_cmp(ctx, >=, sp);
+        break;
+      case LSS:
+        binop_cmp(ctx, <, sp);
+        break;
+      case LEQ:
+        binop_cmp(ctx, <=, sp);
+        break;
+      case GRT:
+        binop_cmp(ctx, >, sp);
+        break;
+      case GEQ:
+        binop_cmp(ctx, >=, sp);
+        break;
       }
       break;
     case UOP:
@@ -473,15 +520,30 @@ int rho_call(rho_context *ctx, int n) {
       case REV:
         sp->u.i = ~sp->u.i;
         break;
+      case INC:
+        sp->u.i++;
+        break;
+      case DEC:
+        sp->u.i--;
+        break;
+      case AT:
+        rho_println(ctx, sp);
+        break;
       }
+      break;
     case J: /* Jump to pc+a */
       a = *pc++;
       pc += a;
+      break;
+    case JB: /* Jump to pc-a */
+      a = *pc++;
+      pc -= a;
       break;
     case JZ: /* Jump to pc+a if TOS is falsy */
       a = *pc++;
       if (!(sp->u.i))
         pc += a;
+      sp--; /* drop the value used for comparison */
       break;
     case NOP:
       break;
@@ -543,7 +605,8 @@ static void closerefs(rho_context *ctx, rho_value *arg) {
   }
 }
 
-noreturn static void syntaxerror(rho_parser *ps, const char *s) {
+noreturn static void syntaxerror(rho_parser *ps, const char *fmt, ...) {
+  va_list ap;
   struct token *t;
   char *p, *end, *bp, b[64];
   int n, i;
@@ -573,14 +636,17 @@ noreturn static void syntaxerror(rho_parser *ps, const char *s) {
   *bp++ = '\0';
   fprintf(stderr, b);
   fprintf(stderr, "syntax error: ");
-  rho_panic(ps->ctx, s);
+  va_start(ap, fmt);
+  vfprintf(stderr, fmt, ap);
+  va_end(ap);
+  putc('\n', stderr);
+  exit(1);
 }
 
 #define expect(ps, tk)                                                         \
   do {                                                                         \
     if (ps->t.kind != tk)                                                      \
-      rho_panic(ps->ctx, "parse error: expect token %s at line %d", TK[tk],    \
-                ps->line);                                                     \
+      syntaxerror(ps, "expect token '%s'", TK[tk]);                            \
   } while (0)
 
 static void stmtlist(rho_parser *ps, Tk end) {
@@ -598,6 +664,12 @@ static void stmt(rho_parser *ps) {
 
   tk = ps->t.kind;
   switch (tk) {
+  case BRK:
+    emit(ps, J);
+    emit(ps, NOP);
+    /* TODO: save */
+    next(ps);
+    return;
   case CMT:
     next(ps);
     return;
@@ -624,38 +696,104 @@ static void stmt(rho_parser *ps) {
   }
 }
 
-// static void block(rho_parser *ps) {}
+static int block(rho_parser *ps) {
+  int a;
 
-/* ifexpr := 'if' expr block [ 'else' block ] */
+  expect(ps, BRCL);
+  next(ps);
+  a = len(ps->p->code);
+  stmtlist(ps, BRCR);
+  expect(ps, BRCR);
+  next(ps);
+  return len(ps->p->code) - a;
+}
+
+/*
+ifexpr := 'if' expr block [ 'else' block ]
+
+s0            s0
+if s1 {       s1
+  s2          jz -> s3
+} else {      s2
+  s3          j  -> s4
+}             s3
+s4            s4
+*/
 static void ifexpr(rho_parser *ps) {
-  int a, off;
+  byte **pp;
+  int n, s2, s3;
 
+  pp = &ps->p->code;
   expect(ps, IF);
   next(ps);
   expr(ps, 0); /* s1 */
-  expect(ps, BRCL);
-  next(ps);
   emit(ps, JZ);
   emit(ps, NOP);
-  a = len(ps->p->code);
-  stmtlist(ps, BRCR); /* s2 */
-  off = len(ps->p->code) - a;
-  ps->p->code[a - 1] = off;
-  expect(ps, BRCR);
-  next(ps);
+  s2 = len(*pp);
+  block(ps); /* s2 */
   if (ps->t.kind == ELSE) {
-    next(ps);
-    expect(ps, BRCL);
-    next(ps);
     emit(ps, J);
     emit(ps, NOP);
-    a = len(ps->p->code);
-    stmtlist(ps, BRCR); /* s3 */
-    off = len(ps->p->code) - a;
-    ps->p->code[a - 1] = off;
-    expect(ps, BRCR);
     next(ps);
+    s3 = len(*pp);
+    block(ps); /* s3 */
+    n = len(*pp);
+    (*pp)[s3 - 1] = n - s3;
   }
+  (*pp)[s2 - 1] = s3 - s2;
+}
+
+/*
+forexpr := 'for' [ stmt ] ';' [ expr ] ';' [ stmt ] block
+
+s0                   s0
+for s1; s2; s3 {     s1
+  s4                 s2
+}                    jz -> s5
+s5                   j  -> s4
+                     s3
+                     j  -> s2
+                     s4
+                     j  -> s3
+                     s5
+*/
+static void forexpr(rho_parser *ps) {
+  byte **pp;
+  int j5, j4, j2, j3, s2, s3;
+
+  pp = &ps->p->code;
+  expect(ps, FOR);
+  next(ps);
+  if (ps->t.kind != SEM)
+    stmt(ps); /* s1 */
+  expect(ps, SEM);
+  next(ps);
+  s2 = len(*pp);
+  if (ps->t.kind != SEM)
+    expr(ps, 0); /* s2 */
+  emit(ps, JZ);
+  emit(ps, NOP);
+  j5 = len(*pp);
+  emit(ps, J);
+  emit(ps, NOP);
+  j4 = len(*pp);
+  expect(ps, SEM);
+  next(ps);
+  s3 = len(*pp);
+  if (ps->t.kind != BRCL)
+    stmt(ps); /* s3 */
+  emit(ps, JB);
+  emit(ps, NOP);
+  j2 = len(*pp);
+  block(ps); /* s4 */
+  emit(ps, JB);
+  emit(ps, NOP);
+  j3 = len(*pp);
+
+  (*pp)[j5 - 1] = j3 - j5;
+  (*pp)[j4 - 1] = j2 - s3;
+  (*pp)[j2 - 1] = j2 - s2;
+  (*pp)[j3 - 1] = j3 - s3;
 }
 
 /* vardecl := 'var' arglist */
@@ -766,6 +904,7 @@ static void expr(rho_parser *ps, int plv) {
 
 static void uexpr(rho_parser *ps) {
   Tk tk;
+  int n;
 
   tk = ps->t.kind;
   switch (tk) {
@@ -775,10 +914,19 @@ static void uexpr(rho_parser *ps) {
     return;
   case ID:
     /* TODO */
-    ident(ps);
+    n = ident(ps);
+    tk = ps->t.kind;
+    if (tk == INC || tk == DEC) {
+      emit(ps, UOP);
+      emit(ps, tk);
+      emit(ps, POP);
+      emit(ps, n);
+      next(ps);
+    }
     return;
   case NOT:
   case REV:
+  case AT:
     next(ps);
     expr(ps, 0);
     emit(ps, UOP);
@@ -788,7 +936,7 @@ static void uexpr(rho_parser *ps) {
     ifexpr(ps);
     return;
   case FOR:
-    /* TODO: for statement */
+    forexpr(ps);
     return;
   case PARL:
     next(ps);
@@ -874,13 +1022,14 @@ end:
   return vp;
 }
 
-static void ident(rho_parser *ps) {
+static int ident(rho_parser *ps) {
   rho_var *vp;
 
   vp = findvar(ps, &ps->t);
   emit(ps, vp->scope == 0 ? PSH : PSHR);
   emit(ps, vp->idx);
   next(ps);
+  return vp->idx;
 }
 
 static void peek(rho_parser *ps) { scan(ps, &ps->ahead); }
@@ -990,18 +1139,32 @@ top:
     choose(ps, t, p, '|', LOR, OR);
     goto defer;
   case '<':
-    if (*p != '<')
-      goto err;
+    switch (*p) {
+    case '<':
+      t->kind = SHL;
+      break;
+    case '=':
+      t->kind = LEQ;
+      break;
+    default:
+      t->kind = LSS;
+    }
     p++;
-    t->kind = SHL;
     t->linep = ps->linep;
     t->line = ps->line;
     goto defer;
   case '>':
-    if (*p != '>')
-      goto err;
+    switch (*p) {
+    case '>':
+      t->kind = SHR;
+      break;
+    case '=':
+      t->kind = GEQ;
+      break;
+    default:
+      t->kind = GRT;
+    }
     p++;
-    t->kind = SHR;
     t->linep = ps->linep;
     t->line = ps->line;
     goto defer;
@@ -1058,6 +1221,11 @@ top:
     goto defer;
   case ',':
     t->kind = COM;
+    t->linep = ps->linep;
+    t->line = ps->line;
+    goto defer;
+  case '@':
+    t->kind = AT;
     t->linep = ps->linep;
     t->line = ps->line;
     goto defer;
@@ -1120,31 +1288,32 @@ static void emit(rho_parser *ps, byte c) {
 int rho_dump(rho_context *ctx, rho_closure *cls, FILE *fp) {
   rho_var *vp;
   byte op, a, *p;
-  int n, i, k;
+  int n, i, k, l;
 
   p = cls->p->code;
   n = len(p);
   for (k = 0; k < n; k += 2) {
+    l = k + 1;
     op = p[k];
-    a = p[k + 1];
-    fprintf(fp, "0x%02X  %s\n", op, OP[op]);
-    fprintf(fp, "0x%02X  ", a);
+    a = p[l];
+    fprintf(fp, "%4d    0x%02X    %s\n", k, op, OP[op]);
+    fprintf(fp, "%4d    0x%02X    ", l, a);
     switch (op) {
     case UOP:
     case BOP:
       fprintf(fp, "%-5d (%s)", a, TK[a]);
       break;
     case RET:
-      fprintf(fp, "%d", (int)a);
+      fprintf(fp, "%d", a);
       break;
     case PSHC:
-      fprintf(fp, "%-5d (", (int)a);
+      fprintf(fp, "%-5d (", a);
       rho_printv(ctx, cls->p->consts + a, 0);
       fprintf(fp, ")");
       break;
     case PSHR:
     case POPR:
-      fprintf(fp, "%-5d (", (int)a);
+      fprintf(fp, "%-5d (", a);
       vp = cls->p->refs + a;
       for (i = 0; i < vp->name.len; i++)
         putc(vp->name.p[i], fp);
@@ -1152,15 +1321,17 @@ int rho_dump(rho_context *ctx, rho_closure *cls, FILE *fp) {
       break;
     case PSH:
     case POP:
-      fprintf(fp, "%-5d (", (int)a);
+      fprintf(fp, "%-5d (", a);
       vp = cls->p->vars + a;
       for (i = 0; i < vp->name.len; i++)
         putc(vp->name.p[i], fp);
       fprintf(fp, ")");
       break;
     case J:
+    case JB:
     case JZ:
-      fprintf(fp, "%-5d", a);
+      fprintf(fp, "%-5d (", a);
+      fprintf(fp, "%d)", 1 + l + (op == JB ? -a : a));
       break;
     }
     putc('\n', fp);
