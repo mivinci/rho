@@ -43,7 +43,7 @@
     }                                                                          \
   } while (0)
 
-#define binop_int(ctx, op, sp)                                                 \
+#define binop_bit(ctx, op, sp)                                                 \
   do {                                                                         \
     rho_value *p = (sp)--;                                                     \
     switch (tag(sp)) {                                                         \
@@ -76,12 +76,14 @@ enum Op {
   UOP,
   CALL,
   RET,
+  J,
+  JZ,
   MAKE,
   ATTR,
 };
 
-static char *OP[] = {"nop", "pshc", "pshr", "psh", "popr", "pop",
-                     "bop", "uop",  "call", "ret", "make", "attr"};
+static char *OP[] = {"nop", "pshc", "pshr", "psh", "popr", "pop",  "bop",
+                     "uop", "call", "ret",  "j",   "jz",   "make", "attr"};
 
 enum Tk {
   EOT, /* end of token */
@@ -124,6 +126,10 @@ enum Tk {
 
   PARL, /* ( */
   PARR, /* ) */
+  BRKL, /* [ */
+  BRKR, /* ] */
+  BRCL, /* { */
+  BRCR, /* } */
   COL,  /* : */
   SEM,  /* ; */
   DOT,  /* . */
@@ -142,12 +148,12 @@ enum Tk {
 };
 
 static char *TK[] = {
-    "EOT", "//", "INT",     "FLT",   "STR",  "ID",  "++",    "--",
-    "~",   "!",  "_bop",    "+",     "-",    "*",   "/",     "%",
-    "**",  "&",  "|",       "^",     "&&",   "||",  "<<",    ">>",
-    "==",  "!=", "_bopend", "=",     "(",    ")",   ":",     ";",
-    ".",   ",",  "_kw",     "if",    "else", "for", "break", "continue",
-    "var", "fn", "struct",  "_kwend"};
+    "EOT",  "//",  "INT",     "FLT",      "STR", "ID", "++",     "--",
+    "~",    "!",   "_bop",    "+",        "-",   "*",  "/",      "%",
+    "**",   "&",   "|",       "^",        "&&",  "||", "<<",     ">>",
+    "==",   "!=",  "_bopend", "=",        "(",   ")",  "[",      "]",
+    "{",    "}",   ":",       ";",        ".",   ",",  "_kw",    "if",
+    "else", "for", "break",   "continue", "var", "fn", "struct", "_kwend"};
 
 static char *TG[] = {"int",      "float", "bool",    "pointer",
                      "c string", "proto", "c proto", "closure"};
@@ -289,6 +295,7 @@ static rho_type *arglist(rho_parser *, bool);
 static void uexpr(rho_parser *);
 static void expr(rho_parser *, int);
 static void exprlist(rho_parser *);
+static void ifexpr(rho_parser *);
 static void scan(rho_parser *, struct token *);
 static void emit(rho_parser *, byte);
 static void traceback(rho_context *);
@@ -427,6 +434,7 @@ int rho_call(rho_context *ctx, int n) {
       break;
     case POP:
       ap[*pc++] = *sp--;
+      break;
     case BOP:
       a = *pc++;
       switch (a) {
@@ -443,29 +451,48 @@ int rho_call(rho_context *ctx, int n) {
         binop(ctx, /, sp);
         break;
       case MOD:
-        binop_int(ctx, %, sp);
+        binop_bit(ctx, %, sp);
         break;
       case AND:
-        binop_int(ctx, &, sp);
+        binop_bit(ctx, &, sp);
         break;
       case OR:
-        binop_int(ctx, |, sp);
+        binop_bit(ctx, |, sp);
         break;
       case XOR:
-        binop_int(ctx, ^, sp);
+        binop_bit(ctx, ^, sp);
         break;
       case SHL:
-        binop_int(ctx, <<, sp);
+        binop_bit(ctx, <<, sp);
         break;
       case SHR:
-        binop_int(ctx, >>, sp);
+        binop_bit(ctx, >>, sp);
         break;
       }
+      break;
+    case UOP:
+      a = *pc++;
+      switch (a) {
+      case NOT:
+        sp->u.i = !sp->u.i;
+        break;
+      case REV:
+        sp->u.i = ~sp->u.i;
+        break;
+      }
+    case J: /* Jump to pc+a */
+      a = *pc++;
+      pc += a;
+      break;
+    case JZ: /* Jump to pc+a if TOS is falsy */
+      a = *pc++;
+      if (!(sp->u.i))
+        pc += a;
       break;
     case NOP:
       break;
     default:
-      rho_panic(ctx, "runtime error: bad opcode %d", *(pc - 1));
+      rho_panic(ctx, "runtime error: bad opcode %s", OP[*(pc - 1)]);
     }
   }
 }
@@ -579,12 +606,6 @@ static void stmt(rho_parser *ps) {
   case CMT:
     next(ps);
     return;
-  case IF:
-    /* TODO: if statement */
-    return;
-  case FOR:
-    /* TODO: for statement */
-    return;
   case VAR:
     vardecl(ps);
     return;
@@ -605,6 +626,37 @@ static void stmt(rho_parser *ps) {
     /* otherwise fall back to expr */
   default:
     expr(ps, 0); /* expression */
+  }
+}
+
+static void ifexpr(rho_parser *ps) {
+  int a, off;
+
+  expect(ps, IF);
+  next(ps);
+  expr(ps, 0); /* s1 */
+  emit(ps, JZ);
+  emit(ps, NOP);
+  expect(ps, BRCL);
+  next(ps);
+  a = len(ps->p->code);
+  stmt(ps); /* s2 */
+  off = len(ps->p->code) - a;
+  ps->p->code[a - 1] = off;
+  expect(ps, BRCR);
+  next(ps);
+  if (ps->t.kind == ELSE) {
+    next(ps);
+    expect(ps, BRCL);
+    next(ps);
+    a = len(ps->p->code);
+    emit(ps, J);
+    emit(ps, NOP);
+    stmt(ps); /* s3 */
+    off = len(ps->p->code) - a;
+    ps->p->code[a - 1] = off;
+    expect(ps, BRCR);
+    next(ps);
   }
 }
 
@@ -643,7 +695,7 @@ static rho_type *arglist(rho_parser *ps, bool isconst) {
     for (i = 0; i < n; i++) {
       tp = ps->ctx->types + i;
       if (rho_strcmp(&tp->name, &ps->t.s) == 0) {
-        // ((*vpp) + k)->type = tp;
+        (*vpp)[k].type = tp;
         return tp;
       }
     }
@@ -652,8 +704,8 @@ static rho_type *arglist(rho_parser *ps, bool isconst) {
     next(ps);
     tp = arglist(ps, isconst);
     if (tp)
-      // ((*vpp) + k)->type = tp;
-      return tp;
+      (*vpp)[k].type = tp;
+    return tp;
   default:
     syntaxerror(ps, "unexpected token");
   }
@@ -733,6 +785,12 @@ static void uexpr(rho_parser *ps) {
     expr(ps, 0);
     emit(ps, UOP);
     emit(ps, tk);
+    return;
+  case IF:
+    ifexpr(ps);
+    return;
+  case FOR:
+    /* TODO: for statement */
     return;
   case PARL:
     next(ps);
@@ -972,6 +1030,16 @@ top:
     goto defer;
   case ')':
     t->kind = PARR;
+    t->linep = ps->linep;
+    t->line = ps->line;
+    goto defer;
+  case '{':
+    t->kind = BRCL;
+    t->linep = ps->linep;
+    t->line = ps->line;
+    goto defer;
+  case '}':
+    t->kind = BRCR;
     t->linep = ps->linep;
     t->line = ps->line;
     goto defer;
@@ -1351,4 +1419,9 @@ int rho_len(void *p) {
     return 0;
   h = header(p);
   return (h->size - h->avail) / h->esize;
+}
+
+int rho_dump(rho_context *ctx, rho_closure *cls) {
+  /* TODO */
+  return 0;
 }

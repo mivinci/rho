@@ -11,7 +11,11 @@ ifeq ($(DEBUG), 1)
 endif
 
 
-all: librho.a
+all: rho
+
+
+rho: main.c rho.h librho.a
+	$(CC) $(CFLAGS) -o $@ main.c -L. -lrho
 
 
 librho.a: rho.o
@@ -24,16 +28,9 @@ librho.a: rho.o
 
 .PHONY: clean
 clean:
-	rm *.out
 	rm *.o
 	rm *.a
-
-
-test_parse.out: test_parse.c rho.h librho.a
-	$(CC) $(CFLAGS) -o $@ test_parse.c -L. -lrho
-
-test_load.out: test_load.c rho.h librho.a
-	$(CC) $(CFLAGS) -o $@ test_load.c -L. -lrho
+	rm *.out
 
 test_append.out: test_append.c rho.h librho.a
 	$(CC) $(CFLAGS) -o $@ test_append.c -L. -lrho
