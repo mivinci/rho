@@ -1,16 +1,25 @@
-var a, b, c int
-
-
-a = 1
-c = 0
-
-b = for a = 0; a < 4; a++ {
-  c = c + a
-  c
+struct A {
+  a   int
+  bb  float
+  ccc bool
 }
-b
 
+struct B {
+  a   A
+  b   B
+  c   C
+}
 
+// var a, b, c int
+
+// a = 1
+// c = 0
+
+// b = for a = 0; a < 4; a++ {
+//   c = c + a
+//   c
+// }
+// b
 
 // b = if a > 2 {
 //   c = 100 + a

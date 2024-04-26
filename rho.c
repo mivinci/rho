@@ -255,7 +255,7 @@ struct rho_var {
 
 struct rho_type {
   rho_string name;
-  rho_type **attr;
+  rho_var *attrs;
   int callable : 1;
   int alias;
 };
@@ -305,6 +305,7 @@ static int ident(rho_parser *);
 static void block(rho_parser *);
 static void stmt(rho_parser *);
 static void stmtlist(rho_parser *, Tk);
+static void structdecl(rho_parser *);
 static void vardecl(rho_parser *);
 static void assign(rho_parser *);
 static rho_type *arglist(rho_parser *, bool);
@@ -674,7 +675,7 @@ static void stmt(rho_parser *ps) {
     /* TODO: function declaration*/
     return;
   case STRT:
-    /* TODO: struct declaration */
+    structdecl(ps);
     return;
   case ID:
     /* TODO:  */
@@ -835,6 +836,61 @@ static rho_type *arglist(rho_parser *ps, bool isconst) {
   default:
     syntaxerror(ps, "unexpected token");
   }
+}
+
+static rho_type *findtype(rho_parser *ps, struct token *t) {
+  rho_type *tp;
+  int n, i;
+
+  n = len(ps->ctx->types);
+  for (i = 0; i < n; i++) {
+    tp = ps->ctx->types + i;
+    if (rho_strcmp(&tp->name, &t->s) == 0)
+      return tp;
+  }
+  return NULL;
+}
+
+static void structdecl(rho_parser *ps) {
+  rho_type t, *tp, **tpp, *ap;
+  rho_var v;
+  int i;
+
+  expect(ps, STRT);
+  next(ps);
+
+  tp = findtype(ps, &ps->t);
+  if (tp)
+    syntaxerror(ps, "redundant type definition");
+
+  t.name = ps->t.s;
+  t.attrs = NULL;
+  /* we must append t before moving to its attributes who's
+     type can also be t  */
+  tpp = &ps->ctx->types;
+  *tpp = rho_append(ps->ctx, *tpp, &t, 1, rho_type);
+  tp = *tpp + len(*tpp) - 1;
+
+  next(ps);
+  expect(ps, BRCL);
+  next(ps);
+
+  i = 0;
+  while (ps->t.kind != BRCR) {
+    expect(ps, ID);
+    v.name = ps->t.s;
+    next(ps);
+    expect(ps, ID);
+    ap = findtype(ps, &ps->t);
+    if (!ap)
+      syntaxerror(ps, "undefined type");
+    v.type = ap;
+    v.idx = i;
+    tp->attrs = rho_append(ps->ctx, tp->attrs, &v, 1, rho_var);
+    next(ps);
+    i++;
+  }
+  next(ps);
 }
 
 /* assign := ID [ ',' ID ]+ [ bop ] '=' exprlist */
