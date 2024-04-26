@@ -1,0 +1,99 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Rho",
+	"patterns": [
+		{
+			"include": "#keyword"
+		},
+		{
+			"include": "#constant"
+		},
+		{
+			"include": "#comment"
+		},
+		{
+			"include": "#function"
+		},
+		{
+			"include": "#type"
+		}
+	],
+	"repository": {
+		"keyword": {
+			"patterns": [
+				{
+					"name": "keyword.rho",
+					"match": "\\b(fn|struct|interface|var|int|float|bool|self)\\b"
+				},
+				{
+					"name": "keyword.control.rho",
+					"match": "\\b(if|else|for|return|break|continue|goto|switch|case|default)\\b"
+				}
+			]
+		},
+		"constant": {
+			"patterns": [
+				{
+					"name": "string.quoted.double.rho",
+					"begin": "\"",
+					"end": "\"",
+					"patterns": [
+						{
+							"name": "constant.character.escape.rho",
+							"match": "\\\\."
+						}
+					]
+				},
+				{
+					"name": "constant.numeric.rho",
+					"match": "\\b(0x|0b|0o)?[.0-9]+\\b"
+				}
+			]
+		},
+		"comment": {
+			"patterns": [
+				{
+					"name": "comment.block.rho",
+					"begin": "/\\*",
+					"end": "\\*/",
+					"patterns": [
+						{
+							"include": "#comment-tag"
+						}
+					]
+				},
+				{
+					"name": "comment.line.rho",
+					"begin": "//",
+					"end": "$",
+					"patterns": [
+						{
+							"include": "#comment-tag"
+						}
+					]
+				}
+			]
+		},
+		"comment-tag": {
+			"name": "keyword.codetag.rho",
+			"match": "\\b(?:TODO|BUG|NOTE)\\b"
+		},
+		"function": {
+			"patterns": [
+				{
+					"name": "entity.name.function.rho",
+					"match": "(?<=(fn\\s+)?)\\b[\\w\\.]+(?=\\()"
+				}
+			]
+		},
+		"type": {
+			"patterns": [
+				{
+					"name": "entity.name.type.rho",
+					"match": "(?<=(struct|interface)\\s+)\\w+(?=\\s+\\{)"
+				}
+			]
+		}
+	},
+	"scopeName": "source.rho"
+}
