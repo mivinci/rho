@@ -1,29 +1,31 @@
 var a, b, c int
 
 
-b = 0
-c = for a = 0; a < 4; a++ {
-  b = b + a
-  b
-}
-@c
-
-
 a = 1
-b = if a > 2 {
-  c = 100 + a
-  c
-} else {
-  c = 200 + a
+c = 0
+
+b = for a = 0; a < 4; a++ {
+  c = c + a
   c
 }
 b
 
-/*
-a, b = 1, 2
-c = a + b
-c
 
-a = 114151
-a
-*/
+
+// b = if a > 2 {
+//   c = 100 + a
+//   c
+// } else {
+//   c = 200 + a
+//   c
+// }
+// b
+
+
+
+// a, b = 1, 2
+// c = a + b
+// c
+
+// a = 114151
+// a

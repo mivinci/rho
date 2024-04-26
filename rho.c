@@ -70,7 +70,7 @@
     }                                                                          \
   } while (0)
 
-typedef unsigned char byte;
+typedef rho_byte byte;
 typedef enum Op Op;
 typedef enum Tk Tk;
 
@@ -238,11 +238,6 @@ struct rho_context {
   struct list_head link;
 };
 
-struct rho_string {
-  byte *p;
-  int len;
-};
-
 struct rho_ref {
   rho_ref *next;
   rho_value *vp;
@@ -299,16 +294,15 @@ struct rho_parser {
   byte *curp;
   byte *linep;
   int line;
-  /* Members below are for debug only. */
-  byte op;
 };
 
 static int precedence(int);
 static void next(rho_parser *);
 static void peek(rho_parser *);
 static void number(rho_parser *);
+static void literal(rho_parser *);
 static int ident(rho_parser *);
-// static void block(rho_parser *);
+static void block(rho_parser *);
 static void stmt(rho_parser *);
 static void stmtlist(rho_parser *, Tk);
 static void vardecl(rho_parser *);
@@ -696,16 +690,12 @@ static void stmt(rho_parser *ps) {
   }
 }
 
-static int block(rho_parser *ps) {
-  int a;
-
+static void block(rho_parser *ps) {
   expect(ps, BRCL);
   next(ps);
-  a = len(ps->p->code);
   stmtlist(ps, BRCR);
   expect(ps, BRCR);
   next(ps);
-  return len(ps->p->code) - a;
 }
 
 /*
@@ -868,6 +858,7 @@ static void assign(rho_parser *ps) {
     syntaxerror(ps, "unexpected token");
   }
 end:
+  /* TODO: statistic analysis for types */
   emit(ps, vp->scope == 0 ? POP : POPR);
   emit(ps, vp->idx);
 }
@@ -912,6 +903,9 @@ static void uexpr(rho_parser *ps) {
   case FLT:
     number(ps);
     return;
+  case STR:
+    literal(ps);
+    return;
   case ID:
     /* TODO */
     n = ident(ps);
@@ -951,9 +945,35 @@ static void uexpr(rho_parser *ps) {
   }
 }
 
-static void number(rho_parser *ps) {
-  rho_value v, *vp, **vpp;
+static void constant(rho_parser *ps, rho_value *vp) {
+  rho_value *p, **vpp;
   int n, i;
+
+  n = len(ps->p->consts);
+  for (i = 0; i < n; i++) {
+    p = ps->p->consts + i;
+    if (rho_eq(ps->ctx, p, vp))
+      goto end;
+  }
+  vpp = &ps->p->consts;
+  if (i == n)
+    *vpp = rho_append(ps->ctx, *vpp, vp, 1, rho_value);
+end:
+  emit(ps, PSHC);
+  emit(ps, i);
+}
+
+static void literal(rho_parser *ps) {
+  rho_value v;
+
+  v.tag = STR;
+  v.u.s = ps->t.s;
+  constant(ps, &v);
+  next(ps);
+}
+
+static void number(rho_parser *ps) {
+  rho_value v;
   long k;
   double d;
 
@@ -971,19 +991,7 @@ static void number(rho_parser *ps) {
     v = rho_float(d);
     break;
   }
-
-  n = len(ps->p->consts);
-  for (i = 0; i < n; i++) {
-    vp = ps->p->consts + i;
-    if (rho_eq(ps->ctx, vp, &v))
-      goto end;
-  }
-  vpp = &ps->p->consts;
-  if (i == n)
-    *vpp = rho_append(ps->ctx, *vpp, &v, 1, rho_value);
-end:
-  emit(ps, PSHC);
-  emit(ps, i);
+  constant(ps, &v);
   next(ps);
 }
 
@@ -1308,7 +1316,7 @@ int rho_dump(rho_context *ctx, rho_closure *cls, FILE *fp) {
       break;
     case PSHC:
       fprintf(fp, "%-5d (", a);
-      rho_printv(ctx, cls->p->consts + a, 0);
+      rho_printv(ctx, cls->p->consts + a, 0, true);
       fprintf(fp, ")");
       break;
     case PSHR:
@@ -1389,15 +1397,15 @@ bool rho_eq(rho_context *ctx, rho_value *a, rho_value *b) {
     return a->u.i == b->u.i;
   case RHO_FLOAT:
     return a->u.f == b->u.f;
-  case RHO_CSTR:
-    return strcmp((const char *)a->u.ptr, (const char *)a->u.ptr) == 0;
+  case RHO_STR:
+    return strcmp((const char *)a->u.ptr, (const char *)b->u.ptr) == 0;
   default:
     return a->u.ptr == b->u.ptr;
   }
 }
 
-int rho_printv(rho_context *ctx, rho_value *vp, char end) {
-  int n;
+int rho_printv(rho_context *ctx, rho_value *vp, char end, bool quote) {
+  int n, i;
 
   switch (tag(vp)) {
   case RHO_INT:
@@ -1405,6 +1413,14 @@ int rho_printv(rho_context *ctx, rho_value *vp, char end) {
     break;
   case RHO_FLOAT:
     n = printf("%lf", tofloat(vp));
+    break;
+  case RHO_STR:
+    if (quote)
+      putc('"', stdout);
+    for (i = 0; i < vp->u.s.len; i++)
+      putc(vp->u.s.p[i], stdout);
+    if (quote)
+      putc('"', stdout);
     break;
   default:
     n = printf("<object 0x%p>", toptr(vp));

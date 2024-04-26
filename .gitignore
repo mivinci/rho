@@ -3,4 +3,5 @@
 *.o
 *.dSYM
 .vscode
+*.vsix
 rho

@@ -41,7 +41,7 @@ extern "C" {
 #define rho_free(c, p)            rho_freegc(c, p)
 #define rho_append(c, d, s, n, t) ((t *)rho_appendgc(c, d, s, n, sizeof(t)))
 
-#define rho_println(c, p) rho_printv(c, p, '\n')
+#define rho_println(c, p) rho_printv(c, p, '\n', false)
 
 #define rho_pushint(c, n)     rho_push(c, rho_int(n))
 #define rho_pushfloat(c, v)   rho_push(c, rho_float(v))
@@ -57,7 +57,7 @@ extern "C" {
 #define RHO_FLOAT   1
 #define RHO_BOOL    2
 #define RHO_PTR     3
-#define RHO_CSTR    4
+#define RHO_STR    4
 #define RHO_PROTO   5
 #define RHO_CPROTO  6
 #define RHO_CLOSURE 7
@@ -75,13 +75,20 @@ typedef struct rho_header rho_header;
 typedef struct rho_string rho_string;
 typedef void *(*rho_allocator)(void *, int);
 typedef int (*rho_cproto)(rho_context *, int);
+typedef unsigned char rho_byte;
+
+struct rho_string {
+  rho_byte *p;
+  int len;
+};
 
 struct rho_value {
-  int tag;
+  int tag : 4;
   union {
     long i;
     double f;
     void *ptr;
+    rho_string s;
   } u;
 };
 
@@ -98,7 +105,7 @@ bool rho_eq(rho_context *, rho_value *, rho_value *);
 void rho_push(rho_context *, rho_value);
 rho_value rho_pop(rho_context *);
 rho_value rho_cast(rho_context *, rho_value *, int);
-int rho_printv(rho_context *, rho_value *, char);
+int rho_printv(rho_context *, rho_value *, char, bool);
 void *rho_allocgc(rho_context *, int);
 void *rho_callocgc(rho_context *, int, int);
 void rho_freegc(rho_context *, void *);
