@@ -248,6 +248,7 @@ struct rho_var {
   rho_type *type;
   rho_string name;
   int isconst : 1;
+  int ispub : 1;
   int scope;
   int idx; /* index into proto::vars of the parent function if ::islocal,
               otherwise index into closure::refs of the parent function.  */
