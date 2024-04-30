@@ -7,8 +7,38 @@ struct A {
 struct B {
   a   A
   b   B
-  c   C
 }
+
+var b B
+
+b = B{
+  a: A{
+    a:   114151,
+    bb:  3.14,
+    ccc: true,
+  },
+  b: B{},
+}
+
+/*
+  opcode  argument  target
+  ===========================
+  pshc    0         (B)
+  make    1         (struct)
+  pshc    2         (A)
+  make    1         (struct)
+  pshc    3         (114151)
+  popa    0         (A.a)
+  pshc    4         (3.14)
+  popa    1         (A.bb)
+  pshc    5         (true)
+  popa    2         (A.ccc)
+  popa    0         (B.a)
+  pshc    1         (B)
+  make    1         (struct)
+  popa    1         (B.b)
+  pop     0         (b) 
+*/
 
 // var a, b, c int
 

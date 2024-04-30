@@ -1,7 +1,21 @@
-// .ρ
+trait animal {
+  fn eat(int) (float, bool)
+}
 
-var a, b, c int
+struct cat {
+  name string
+}
 
-a, b = 1, 2
-c = a + b
-c
+fn (c cat) eat(n int) (int, bool) {
+  printf("%s eats %d grams\n", c.name, n)
+  return 114151, 3.141592
+}
+
+
+var c animal
+
+c = cat{
+  name: "Tom",
+}
+
+c.eat(1)
