@@ -1,0 +1,12 @@
+var a, b, c int
+
+a = 1
+
+b = if a > 2 {
+  c = 100 + a
+  c
+} else {
+  c = 200 + a
+  c
+}
+b

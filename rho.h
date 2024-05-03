@@ -57,7 +57,7 @@ extern "C" {
 #define RHO_FLOAT   1
 #define RHO_BOOL    2
 #define RHO_PTR     3
-#define RHO_STR    4
+#define RHO_STR     4
 #define RHO_PROTO   5
 #define RHO_CPROTO  6
 #define RHO_CLOSURE 7

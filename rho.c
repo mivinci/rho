@@ -967,12 +967,18 @@ static void uexpr(rho_parser *ps) {
     /* TODO */
     n = ident(ps);
     tk = ps->t.kind;
-    if (tk == INC || tk == DEC) {
+    switch (tk) {
+    case INC:
+    case DEC:
       emit(ps, UOP);
       emit(ps, tk);
       emit(ps, POP);
       emit(ps, n);
       next(ps);
+      break;
+    case BRCL:
+      
+      break;
     }
     return;
   case NOT:
